@@ -1,4 +1,8 @@
+//! Web server 
+
 mod config;
+
+use comm::session::Api as SessionApi;
 
 use std::{fs::read_to_string, net::SocketAddr, path::PathBuf, sync::Arc};
 
@@ -13,27 +17,18 @@ use config::Config;
 static CONFIG: Lazy<Config> = Lazy::new(Config::env);
 
 #[derive(Serialize)]
-struct  ErrorReport {
+struct ErrorReport {
     description: String,
 }
 
-async fn root(Extension(handlebars): Extension<Arc<Handlebars<'static>>>) -> Html<String> {
-    match handlebars.render("hello", &()) {
-        Ok(html) => Html(html),
-        Err(e) => {
-            error!("template rendering error: {}", e);
-            Html(handlebars.render("error", &ErrorReport { description: format!("{}", e)}).unwrap())
-        }
-    }
-}
-
-pub struct Web {
+pub struct Web<'a> {
     hb: Arc<Handlebars<'static>>,
     addr: SocketAddr,
+    session_api: &'a dyn SessionApi,
 }
 
-impl Web {
-    pub async fn new() -> Self {
+impl<'a> Web<'a> {
+    pub fn new(session_api: &'a dyn SessionApi) -> Self {
         let hb = {
             let mut hb = Handlebars::new();
             let templates = load_template_dir(&CONFIG.template_dir);
@@ -59,12 +54,13 @@ impl Web {
         Self {
             hb: Arc::new(hb),
             addr,
+            session_api,
         }
     }
 
     pub async fn run(self) {
         let router = Router::new()
-            .route("/", routing::get(root))
+            .route("/", routing::get(handler))
             .layer(Extension(self.hb));
 
         Server::bind(&self.addr)
@@ -106,4 +102,23 @@ fn load_template_dir(dir: &str) -> Vec<(PathBuf, String)> {
     }
 
     templates
+}
+
+async fn handler(Extension(handlebars): Extension<Arc<Handlebars<'static>>>) -> Html<String> {
+    match handlebars.render("hello", &()) {
+        Ok(html) => Html(html),
+        Err(e) => {
+            error!("template rendering error: {}", e);
+            Html(
+                handlebars
+                    .render(
+                        "error",
+                        &ErrorReport {
+                            description: format!("{}", e),
+                        },
+                    )
+                    .unwrap(),
+            )
+        }
+    }
 }

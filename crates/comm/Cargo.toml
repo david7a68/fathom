@@ -1,0 +1,10 @@
+[package]
+name = "comm"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+session = []
+
+[dependencies]
+thiserror = "1.0.31"

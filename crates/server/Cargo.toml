@@ -5,8 +5,9 @@ edition = "2021"
 
 [dependencies]
 web = { path = "../web" }
+session = { path = "../session" }
 
 hyper = "0.14.18"
-tokio = { version = "1", features = ["full"]}
+tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = "0.2"
