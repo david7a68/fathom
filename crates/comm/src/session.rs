@@ -13,7 +13,7 @@ pub struct Token {
     pub key: u128,
 }
 
-pub trait Api {
+pub trait Api: Sync + Send {
     /// Begins a user session by verifying the user's username and password.
     ///
     /// # Errors

@@ -1,4 +1,7 @@
-use tracing::info;
+use std::{net::SocketAddr, sync::Arc};
+
+use axum::Server;
+use tracing::{info, error};
 
 use session::Session;
 use web::Web;
@@ -10,10 +13,20 @@ async fn main() {
     info!("Starting fathom");
     info!(
         "Current working directory: {}",
-        std::env::current_dir().unwrap().display()
+        std::env::current_dir().unwrap().canonicalize().unwrap().display()
     );
 
-    let session = Session::new();
-    let web = Web::new(&session);
-    web.run().await;
+    let session = Box::new(Session::new());
+    let web = Arc::new(Web::new(session));
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let server = Server::bind(&addr).serve(web.router().into_make_service());
+    let server = server.with_graceful_shutdown(async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install CTRL+C handler")
+    });
+    if let Err(e) = server.await {
+        error!("server error: {}", e);
+    }
 }

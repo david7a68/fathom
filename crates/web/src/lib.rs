@@ -1,16 +1,27 @@
-//! Web server 
+//! Web server
 
 mod config;
 
-use comm::session::Api as SessionApi;
+use std::{
+    collections::HashMap,
+    fs::read_to_string,
+    net::SocketAddr,
+    path::{Path as StdPath, PathBuf},
+    sync::Arc,
+};
 
-use std::{fs::read_to_string, net::SocketAddr, path::PathBuf, sync::Arc};
-
-use axum::{response::Html, routing, Extension, Router, Server};
+use axum::{
+    extract::Path,
+    http::{header, StatusCode},
+    response::{Html, IntoResponse},
+    routing, Extension, Router, Server,
+};
 use handlebars::Handlebars;
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
+
+use comm::session::Api as SessionApi;
 
 use config::Config;
 
@@ -21,14 +32,15 @@ struct ErrorReport {
     description: String,
 }
 
-pub struct Web<'a> {
-    hb: Arc<Handlebars<'static>>,
+pub struct Web {
+    templates: Arc<Handlebars<'static>>,
+    stylesheets: HashMap<String, String>,
     addr: SocketAddr,
-    session_api: &'a dyn SessionApi,
+    session_api: Box<dyn SessionApi>,
 }
 
-impl<'a> Web<'a> {
-    pub fn new(session_api: &'a dyn SessionApi) -> Self {
+impl Web {
+    pub fn new(session_api: Box<dyn SessionApi>) -> Self {
         let hb = {
             let mut hb = Handlebars::new();
             let templates = load_template_dir(&CONFIG.template_dir);
@@ -52,26 +64,29 @@ impl<'a> Web<'a> {
         let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
 
         Self {
-            hb: Arc::new(hb),
+            templates: Arc::new(hb),
+            stylesheets: load_stylesheet_dir(&CONFIG.stylesheet_dir),
             addr,
             session_api,
         }
     }
 
-    pub async fn run(self) {
-        let router = Router::new()
-            .route("/", routing::get(handler))
-            .layer(Extension(self.hb));
-
-        Server::bind(&self.addr)
-            .serve(router.into_make_service())
-            .await
-            .unwrap();
+    pub fn router(self: Arc<Self>) -> Router {
+        Router::new()
+            .route("/", routing::get(url_root))
+            .route("/static/css/*path", routing::get(url_static_css))
+            .layer(Extension(self))
     }
 }
 
 fn load_template_dir(dir: &str) -> Vec<(PathBuf, String)> {
     use std::fs::read_dir;
+
+    info!(
+        "Looking for .hbs templates in {}",
+        StdPath::new(dir).canonicalize().unwrap().display()
+    );
+
     let mut templates = vec![];
 
     if let Ok(dirs) = read_dir(dir) {
@@ -104,13 +119,55 @@ fn load_template_dir(dir: &str) -> Vec<(PathBuf, String)> {
     templates
 }
 
-async fn handler(Extension(handlebars): Extension<Arc<Handlebars<'static>>>) -> Html<String> {
-    match handlebars.render("hello", &()) {
+fn load_stylesheet_dir(dir: &str) -> HashMap<String, String> {
+    use std::fs::read_dir;
+
+    info!(
+        "Looking for .css stylesheets in {}",
+        StdPath::new(dir).canonicalize().unwrap().display()
+    );
+
+    let mut stylesheets = HashMap::new();
+
+    if let Ok(dirs) = read_dir(dir) {
+        let mut dirs: Vec<_> = dirs.filter_map(|e| e.ok()).collect();
+
+        while let Some(entry) = dirs.pop() {
+            let meta = entry.metadata().unwrap();
+
+            if meta.is_file() {
+                let path = entry.path();
+
+                if "css" != path.extension().unwrap_or_default() {
+                    continue;
+                }
+
+                let content = read_to_string(&path).expect("all CSS files must be valid UTF-8");
+                stylesheets.insert(
+                    path.file_stem().unwrap().to_str().unwrap().to_string(),
+                    content,
+                );
+            } else {
+                debug_assert!(meta.is_dir());
+                if let Ok(entries) = entry.path().read_dir() {
+                    dirs.extend(entries.filter_map(|e| e.ok()));
+                }
+            }
+        }
+    } else {
+        warn!("Failed to read CSS directory {}", CONFIG.template_dir);
+    }
+
+    stylesheets
+}
+
+async fn url_root(Extension(web): Extension<Arc<Web>>) -> Html<String> {
+    match web.templates.render("index", &()) {
         Ok(html) => Html(html),
         Err(e) => {
             error!("template rendering error: {}", e);
             Html(
-                handlebars
+                web.templates
                     .render(
                         "error",
                         &ErrorReport {
@@ -121,4 +178,20 @@ async fn handler(Extension(handlebars): Extension<Arc<Handlebars<'static>>>) -> 
             )
         }
     }
+}
+
+async fn url_static_css(
+    Extension(web): Extension<Arc<Web>>,
+    Path(path): Path<PathBuf>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let filename = path.file_stem().ok_or(StatusCode::BAD_REQUEST)?;
+    let filename = filename.to_str().ok_or(StatusCode::BAD_REQUEST)?;
+    println!("client requested {}", filename);
+    println!("{:?}", web.stylesheets);
+    let content = web.stylesheets.get(filename).ok_or(StatusCode::NOT_FOUND)?;
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        content.to_string(),
+    ))
 }

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>Index</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="/static/css/index.css" rel="stylesheet">
+</head>
+
+<body style="height:100vh;margin:0;padding:0;">
+    <div id="content" style="display:flex;align-items:center;justify-content:center;height:100%">
+        <div id="login" style="background-color:lightblue;padding:1.5em">
+            <h2 style="margin:none;padding-bottom:1em;">Log In</h2>
+            <input type="text" id="usr" placeholder="Username" required>
+            <br><br>
+            <input type="password" id="pwd" placeholder="Password" autocomplete="current-password">
+            <br><br><br>
+            <div style="text-align:right">
+                <button id="login_submit" style="background-color:transparent;border:none">Enter</button>
+                <br><br>
+            </div>
+
+            <script>
+                document.getElementById("login_submit").addEventListener("click", event => {
+                    let usr = document.getElementById("usr").value;
+                    let pwd = document.getElementById("pwd").value;
+                    const response = fetch("/", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({ username: usr, password: pwd })
+                    });
+                });
+            </script>
+        </div>
+</body>
+
+</html>
