@@ -1,0 +1,13 @@
+[package]
+name = "rest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+comm = { path = "../comm" }
+
+axum = { version = "0.5", features = ["http2", "json"] }
+axum-extra = { version = "0.3", features = ["cookie-private"] }
+axum-macros = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"

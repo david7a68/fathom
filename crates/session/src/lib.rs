@@ -1,5 +1,6 @@
 //! Browser session API.
 
+use async_trait::async_trait;
 use comm::session::{Api, Error, Token};
 
 pub struct Session {}
@@ -10,12 +11,13 @@ impl Session {
     }
 }
 
+#[async_trait]
 impl Api for Session {
-    fn auth(&self, _username: &str, _password_hash: u128) -> Result<Token, Error> {
+    async fn auth(&self, _username: &str, _password: &str) -> Result<Token, Error> {
         Err(Error::InvalidCredential)
     }
 
-    fn user(&self, _token: Token) -> Result<u128, Error> {
+    async fn user(&self, _token: Token) -> Result<u128, Error> {
         Err(Error::InvalidToken)
     }
 }

@@ -36,11 +36,11 @@ pub struct Web {
     templates: Arc<Handlebars<'static>>,
     stylesheets: HashMap<String, String>,
     addr: SocketAddr,
-    session_api: Box<dyn SessionApi>,
+    session_api: Arc<dyn SessionApi>,
 }
 
 impl Web {
-    pub fn new(session_api: Box<dyn SessionApi>) -> Self {
+    pub fn new(session_api: Arc<dyn SessionApi>) -> Self {
         let hb = {
             let mut hb = Handlebars::new();
             let templates = load_template_dir(&CONFIG.template_dir);
@@ -71,7 +71,7 @@ impl Web {
         }
     }
 
-    pub fn router(self: Arc<Self>) -> Router {
+    pub fn routes(self: Arc<Self>) -> Router {
         Router::new()
             .route("/", routing::get(url_root))
             .route("/static/css/*path", routing::get(url_static_css))

@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     /// The provided session token has either expired, or is otherwise invalid.
@@ -9,10 +11,9 @@ pub enum Error {
     InvalidCredential,
 }
 
-pub struct Token {
-    pub key: u128,
-}
+pub type Token = u128;
 
+#[async_trait]
 pub trait Api: Sync + Send {
     /// Begins a user session by verifying the user's username and password.
     ///
@@ -20,7 +21,7 @@ pub trait Api: Sync + Send {
     ///
     /// May return an `InvalidCredential` error if the username, password, or
     /// both are invalid.
-    fn auth(&self, username: &str, password_hash: u128) -> Result<Token, Error>;
+    async fn auth(&self, username: &str, password: &str) -> Result<Token, Error>;
 
     /// Gets the user ID associated with the session token.
     ///
@@ -28,5 +29,5 @@ pub trait Api: Sync + Send {
     ///
     /// May return an `InvalidToken` error if the token has expired, or is
     /// otherwise invalid.
-    fn user(&self, token: Token) -> Result<u128, Error>;
+    async fn user(&self, token: Token) -> Result<u128, Error>;
 }

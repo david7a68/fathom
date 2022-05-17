@@ -9,3 +9,4 @@ session = []
 
 [dependencies]
 thiserror = "1.0.31"
+async-trait = "0.1.53"

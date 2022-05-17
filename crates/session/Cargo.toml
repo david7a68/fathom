@@ -6,3 +6,5 @@ license = "MIT"
 
 [dependencies]
 comm = { path = "../comm", features = ["session"] }
+
+async-trait = "0.1.53"

@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::Server;
+use rest::RestApi;
 use tracing::{info, error};
 
 use session::Session;
@@ -16,11 +17,14 @@ async fn main() {
         std::env::current_dir().unwrap().canonicalize().unwrap().display()
     );
 
-    let session = Box::new(Session::new());
+    let session = Arc::new(Session::new());
+    let rest = Arc::new(RestApi::new(session.clone()));
     let web = Arc::new(Web::new(session));
 
+    let routes = rest.routes().merge(web.routes());
+
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
-    let server = Server::bind(&addr).serve(web.router().into_make_service());
+    let server = Server::bind(&addr).serve(routes.into_make_service());
     let server = server.with_graceful_shutdown(async {
         tokio::signal::ctrl_c()
             .await

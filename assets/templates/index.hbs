@@ -25,13 +25,15 @@
                 document.getElementById("login_submit").addEventListener("click", event => {
                     let usr = document.getElementById("usr").value;
                     let pwd = document.getElementById("pwd").value;
-                    const response = fetch("/", {
+                    const response = fetch("/auth", {
                         method: "POST",
                         headers: {
                             "Content-Type": "application/json"
                         },
                         body: JSON.stringify({ username: usr, password: pwd })
                     });
+
+                    console.log(response);
                 });
             </script>
         </div>

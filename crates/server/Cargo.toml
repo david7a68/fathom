@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
+rest = { path = "../rest" }
 web = { path = "../web" }
 session = { path = "../session" }
 
