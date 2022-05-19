@@ -19,7 +19,7 @@ async fn main() {
 
     let session = Arc::new(Session::new());
     let rest = Arc::new(RestApi::new(session.clone()));
-    let web = Arc::new(Web::new(session));
+    let web = Arc::new(Web::new_from_env());
 
     let routes = rest.routes().merge(web.routes());
 
