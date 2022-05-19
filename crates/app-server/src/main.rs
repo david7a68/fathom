@@ -1,11 +1,11 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::Server;
-use rest::RestApi;
+use endpoint_api::RestApi;
 use tracing::{info, error};
 
-use session::Session;
-use web::Web;
+use service_session::Session;
+use endpoint_web::Web;
 
 #[tokio::main]
 async fn main() {

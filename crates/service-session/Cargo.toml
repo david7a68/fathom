@@ -1,10 +1,10 @@
 [package]
-name = "session"
+name = "service-session"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
 [dependencies]
-comm = { path = "../comm", features = ["session"] }
+base-comm = { path = "../base-comm", features = ["session"] }
 
 async-trait = "0.1.53"

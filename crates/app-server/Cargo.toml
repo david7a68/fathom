@@ -1,13 +1,13 @@
 [package]
-name = "server"
+name = "app-server"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
 [dependencies]
-rest = { path = "../rest" }
-web = { path = "../web" }
-session = { path = "../session" }
+endpoint-api = { path = "../endpoint-api" }
+endpoint-web = { path = "../endpoint-web" }
+service-session = { path = "../service-session" }
 
 axum = { version = "0.5", features = ["http2"] }
 tokio = { version = "1", features = ["full"] }

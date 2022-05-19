@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rand::{thread_rng, RngCore};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -11,7 +12,16 @@ pub enum Error {
     InvalidCredential,
 }
 
-pub type Token = u128;
+// 256-bit session token
+pub struct SessionId([u8; 32]);
+
+impl SessionId {
+    pub fn generate() -> Self {
+        let mut bytes = [0u8; 32];
+        thread_rng().fill_bytes(&mut bytes);
+        Self(bytes)
+    }
+}
 
 #[async_trait]
 pub trait Api: Sync + Send {
@@ -21,7 +31,7 @@ pub trait Api: Sync + Send {
     ///
     /// May return an `InvalidCredential` error if the username, password, or
     /// both are invalid.
-    async fn auth(&self, username: &str, password: &str) -> Result<Token, Error>;
+    async fn auth(&self, username: &str, password: &str) -> Result<SessionId, Error>;
 
     /// Gets the user ID associated with the session token.
     ///
@@ -29,5 +39,5 @@ pub trait Api: Sync + Send {
     ///
     /// May return an `InvalidToken` error if the token has expired, or is
     /// otherwise invalid.
-    async fn user(&self, token: Token) -> Result<u128, Error>;
+    async fn user(&self, id: SessionId) -> Result<u128, Error>;
 }

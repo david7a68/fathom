@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "crates/comm",
-    "crates/rest",
-    "crates/server",
-    "crates/session",
-    "crates/web",
+    "crates/app-server",
+    "crates/base-comm",
+    "crates/endpoint-web",
+    "crates/endpoint-api",
+    "crates/service-session",
 ]

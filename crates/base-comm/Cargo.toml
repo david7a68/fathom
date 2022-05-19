@@ -1,5 +1,5 @@
 [package]
-name = "comm"
+name = "base-comm"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
@@ -8,5 +8,6 @@ license = "MIT"
 session = []
 
 [dependencies]
-thiserror = "1.0.31"
 async-trait = "0.1.53"
+rand = "0.8.5"
+thiserror = "1.0.31"

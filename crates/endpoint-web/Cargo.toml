@@ -1,11 +1,11 @@
 [package]
-name = "web"
+name = "endpoint-web"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
 [dependencies]
-comm = { path = "../comm", features = ["session"] }
+base-comm = { path = "../base-comm", features = ["session"] }
 
 axum = { version = "0.5", features = ["http2"] }
 axum-extra = { version = "0.3", features = ["spa"] }
