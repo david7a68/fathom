@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package fathom.auth.v0;
+
+message AuthRequest {
+    string username = 1;
+    string password = 2;
+}
+
+message AuthResponse {
+    bytes session_id = 1;
+}
+
+service Auth {
+    rpc authenticate(AuthRequest) returns (AuthResponse);
+}

@@ -1,19 +1,23 @@
-use async_trait::async_trait;
 use rand::{thread_rng, RngCore};
+use tonic::async_trait;
+
+pub mod grpc;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    /// The provided session token has either expired, or is otherwise invalid.
-    #[error("the provided token is invalid, it may have expired")]
-    InvalidToken,
-
     /// The provided user credentials are not valid.
     #[error("the provided user credentials are invalid")]
-    InvalidCredential,
+    InvalidCredentials,
+
+    #[error("an error occurred during gRPC transport")]
+    RpcError(tonic::Code),
 }
 
+pub const SESSION_ID_LENGTH: usize = 32;
+
 // 256-bit session token
-pub struct SessionId([u8; 32]);
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct SessionId([u8; SESSION_ID_LENGTH]);
 
 impl SessionId {
     pub fn generate() -> Self {
@@ -31,13 +35,15 @@ pub trait Api: Sync + Send {
     ///
     /// May return an `InvalidCredential` error if the username, password, or
     /// both are invalid.
-    async fn auth(&self, username: &str, password: &str) -> Result<SessionId, Error>;
+    async fn authenticate(&self, username: &str, password: &str) -> Result<SessionId, Error>;
+}
 
-    /// Gets the user ID associated with the session token.
-    ///
-    /// # Errors
-    ///
-    /// May return an `InvalidToken` error if the token has expired, or is
-    /// otherwise invalid.
-    async fn user(&self, id: SessionId) -> Result<u128, Error>;
+#[derive(Default)]
+pub struct Dummy {}
+
+#[async_trait]
+impl Api for Dummy {
+    async fn authenticate(&self, _username: &str, _password: &str) -> Result<SessionId, Error> {
+        Err(Error::RpcError(tonic::Code::Unavailable))
+    }
 }

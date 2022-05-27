@@ -1,8 +1,7 @@
 [workspace]
 members = [
+    "crates/app-desktop",
     "crates/app-server",
-    "crates/base-comm",
-    "crates/endpoint-web",
-    "crates/endpoint-api",
-    "crates/service-session",
+    "crates/lib-rpc",
+    "crates/service-auth",
 ]

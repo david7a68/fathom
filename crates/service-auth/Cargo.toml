@@ -1,0 +1,9 @@
+[package]
+name = "service-auth"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lib-rpc = { path = "../lib-rpc", features = ["auth"] }
+
+async-trait = "0.1"

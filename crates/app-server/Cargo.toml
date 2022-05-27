@@ -5,11 +5,10 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
-endpoint-api = { path = "../endpoint-api" }
-endpoint-web = { path = "../endpoint-web" }
-service-session = { path = "../service-session" }
+service-auth = { path = "../service-auth" }
+lib-rpc = { path = "../lib-rpc", features = ["auth-server"] }
 
-axum = { version = "0.5", features = ["http2"] }
+tonic = "0.7"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = "0.2"
