@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+ash = { version = "0.37.0", features = ["libloading"] }
 
 [dependencies.windows]
 version = "0.38.0"
