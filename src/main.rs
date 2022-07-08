@@ -47,7 +47,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let hwnd = {
-        let os_title = wide_title(WINDOW_TITLE);
+        let os_title = {
+            use std::{ffi::OsStr, os::windows::prelude::OsStrExt};
+            let mut buffer: Vec<u16> = OsStr::new(WINDOW_TITLE).encode_wide().collect();
+            buffer.push(0);
+            buffer
+        };
 
         unsafe {
             CreateWindowExW(
@@ -278,37 +283,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
-/// Converts a string into a `Vec<u16>` of wide characters.
-/// 
-/// Note (straivers): For the moment, this allocates memory on the heap.
-/// However, if things go as I expect once multiple windows are supported with
-/// their associated per-frame bump allocators, these can be allocated from
-/// there instead.
-fn wide_title(title: &str) -> Vec<u16> {
-    use std::{ffi::OsStr, os::windows::prelude::OsStrExt};
-
-    let mut buffer: Vec<u16> = OsStr::new(title).encode_wide().collect();
-    buffer.push(0);
-
-    buffer
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn wstr_conversion() {
-        use std::{ffi::OsStr, os::windows::prelude::OsStrExt};
-
-        let s = "Too many bagels tonight";
-        let wstr = wide_title(s);
-        let os_str: Vec<u16> = OsStr::new(s).encode_wide().collect();
-
-        // Check that the conversion is correct, accounting for the null
-        // terminator in `to_wstr()`.
-        assert_eq!(&wstr.as_slice()[0..wstr.len() - 1], &os_str[..]);
-    }
 
     #[test]
     fn null_terminated_strings() {
