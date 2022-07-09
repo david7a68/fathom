@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::os::raw::c_char;
+
 use ash::vk;
 use windows::{
     core::PCWSTR,
@@ -15,10 +18,10 @@ use windows::{
 
 const WINDOW_TITLE: &str = "Hello!";
 
-const VULKAN_VALIDATION_LAYER_NAME: &str = "VK_LAYER_KHRONOS_validation\0";
+const VALIDATION_LAYER: &[u8] = b"VK_LAYER_KHRONOS_validation\0";
 
-const VULKAN_SURFACE_EXTENSION_NAME: &str = "VK_KHR_surface\0";
-const VULKAN_WIN32_SURFACE_EXTENSION_NAME: &str = "VK_KHR_win32_surface\0";
+const SURFACE_EXTENSION: &[u8] = b"VK_KHR_surface\0";
+const OS_SURFACE_EXTENSION: &[u8] = b"VK_KHR_win32_surface\0";
 
 /// The name of Fathom's window classes `"FATHOM_WNDCLASS"` in UTF-16 as an
 /// array of `u16`s.
@@ -88,34 +91,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         #[cfg(debug_assertions)]
         {
-            let available_layers = vk_entry.enumerate_instance_layer_properties()?;
+            let has_layers = has_required_names(
+                &vk_entry.enumerate_instance_layer_properties()?,
+                |l| &l.layer_name,
+                &[as_cchar_slice(VALIDATION_LAYER)],
+            );
 
-            for property in &available_layers {
-                let name = {
-                    let mut length = 0;
-                    while length < property.layer_name.len() && property.layer_name[length] != 0 {
-                        length += 1;
-                    }
-
-                    length += 1; // add the nul byte, since all layer names are nul-terminated
-                    unsafe {
-                        std::slice::from_raw_parts(
-                            property.layer_name.as_ptr().cast::<u8>(),
-                            length,
-                        )
-                    }
-                };
-
-                if name == VULKAN_VALIDATION_LAYER_NAME.as_bytes() {
-                    instance_layers.push(VULKAN_VALIDATION_LAYER_NAME.as_ptr().cast());
-                }
+            if has_layers[0] {
+                instance_layers.push(VALIDATION_LAYER.as_ptr().cast());
             }
         }
 
-        let extensions = [
-            VULKAN_SURFACE_EXTENSION_NAME.as_ptr().cast(),
-            VULKAN_WIN32_SURFACE_EXTENSION_NAME.as_ptr().cast(),
-        ];
+        let extensions = {
+            let required = &[
+                as_cchar_slice(SURFACE_EXTENSION),
+                as_cchar_slice(OS_SURFACE_EXTENSION),
+            ];
+            let has_required = has_required_names(
+                &vk_entry.enumerate_instance_extension_properties(None)?,
+                |e| &e.extension_name,
+                required,
+            );
+
+            for (index, result) in has_required.iter().enumerate() {
+                if !result {
+                    panic!("required Vulkan extension not found: {:?}", required[index]);
+                }
+            }
+
+            &[
+                SURFACE_EXTENSION.as_ptr().cast(),
+                OS_SURFACE_EXTENSION.as_ptr().cast(),
+            ]
+        };
 
         let instance_ci = vk::InstanceCreateInfo {
             p_application_info: &app_info,
@@ -151,16 +159,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let selected_device = {
             let mut selected_device = None;
 
-            let available_devices = unsafe { vk_instance.enumerate_physical_devices()? };
-
-            for handle in available_devices {
+            for handle in unsafe { vk_instance.enumerate_physical_devices()? } {
                 let properties = unsafe { vk_instance.get_physical_device_properties(handle) };
+                
+                let mut present_family = None;
+                let mut graphics_family = None;
+                
                 let queue_families =
                     unsafe { vk_instance.get_physical_device_queue_family_properties(handle) };
-
-                let mut present_queue_family = None;
-                let mut graphics_queue_family = None;
-
                 for (index, queue_family) in queue_families.iter().enumerate() {
                     let index = index.try_into().unwrap();
 
@@ -172,29 +178,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )?
                     };
 
-                    let found_graphics_queue = queue_family.queue_flags.contains(vk::QueueFlags::GRAPHICS);
+                    let found_graphics_queue =
+                        queue_family.queue_flags.contains(vk::QueueFlags::GRAPHICS);
 
-                    present_queue_family = found_present_queue.then_some(index);
-                    graphics_queue_family = found_graphics_queue.then_some(index);
+                    present_family = found_present_queue.then_some(index);
+                    graphics_family = found_graphics_queue.then_some(index);
 
-                    if present_queue_family.is_some() && graphics_queue_family.is_some() {
+                    if present_family.is_some() && graphics_family.is_some() {
                         break;
                     }
                 }
 
-                // TODO(straivers): check that the device supports the swapchain extension
+                let present_family = if let Some(present_family) = present_family {
+                    present_family
+                } else {
+                    continue;
+                };
 
-                if let (Some(present_queue_family), Some(graphics_queue_family)) =
-                    (present_queue_family, graphics_queue_family)
-                {
-                    selected_device = Some((
-                        handle,
-                        properties,
-                        present_queue_family,
-                        graphics_queue_family,
-                    ));
-                    break;
-                }
+                let graphics_family = if let Some(graphics_family) = graphics_family {
+                    graphics_family
+                } else {
+                    continue;
+                };
+
+                selected_device = Some((handle, properties, present_family, graphics_family));
+                break;
             }
 
             selected_device
@@ -219,10 +227,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 queue_create_infos
             };
 
-            // TODO (straivers): Add swapchain extension
             let device_ci = vk::DeviceCreateInfo {
                 p_queue_create_infos: queue_create_infos.as_ptr(),
-                queue_create_info_count: queue_create_infos.len() as _,
+                queue_create_info_count: 1 + (graphics_queue_family != present_queue_family) as u32,
                 ..Default::default()
             };
 
@@ -283,14 +290,61 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
+fn as_cchar_slice(original: &[u8]) -> &[i8] {
+    unsafe { std::slice::from_raw_parts(original.as_ptr().cast(), original.len()) }
+}
+
+fn has_required_names<T, F: Fn(&T) -> &[c_char], const N: usize>(
+    items: &[T],
+    to_name: F,
+    names: &[&[c_char]; N],
+) -> [bool; N] {
+    let mut item_set = HashSet::new();
+
+    for name in items.iter().map(to_name) {
+        // This is just a simple strnlen. should be fast enough for our purposes here
+        let mut len = 0;
+        while len < name.len() && name[len] != 0 {
+            len += 1;
+        }
+
+        assert!(len < name.len());
+        // +1 to account for the nul terminator
+        item_set.insert(&name[0..len + 1]);
+    }
+
+    let mut results = [false; N];
+    for i in 0..names.len() {
+        results[i] = item_set.contains(names[i])
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn null_terminated_strings() {
-        assert_eq!(VULKAN_VALIDATION_LAYER_NAME.as_bytes().last(), Some(&0));
-        assert_eq!(VULKAN_SURFACE_EXTENSION_NAME.as_bytes().last(), Some(&0));
-        assert_eq!(VULKAN_WIN32_SURFACE_EXTENSION_NAME.as_bytes().last(), Some(&0));   
+        assert_eq!(VALIDATION_LAYER.last(), Some(&0));
+        assert_eq!(SURFACE_EXTENSION.last(), Some(&0));
+        assert_eq!(OS_SURFACE_EXTENSION.last(), Some(&0));
+    }
+
+    #[test]
+    fn name_check() {
+        let available = &[
+            as_cchar_slice(b"one\0"),
+            as_cchar_slice(b"two\0"),
+            as_cchar_slice(b"three\0"),
+        ];
+
+        let required = &[
+            as_cchar_slice(b"three\0")
+        ];
+
+        let result = has_required_names(available, |i| i, required);
+        assert!(result[0]);
     }
 }
