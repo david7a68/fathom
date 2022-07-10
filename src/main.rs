@@ -1,7 +1,9 @@
-use std::collections::HashSet;
 use std::os::raw::c_char;
+use std::{collections::HashSet, ffi::CStr};
 
 use ash::vk;
+use windows::Win32::Foundation::RECT;
+use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows::{
     core::PCWSTR,
     Win32::{
@@ -22,6 +24,10 @@ const VALIDATION_LAYER: &[u8] = b"VK_LAYER_KHRONOS_validation\0";
 
 const SURFACE_EXTENSION: &[u8] = b"VK_KHR_surface\0";
 const OS_SURFACE_EXTENSION: &[u8] = b"VK_KHR_win32_surface\0";
+
+const SWAPCHAIN_EXTENSION: &[u8] = b"VK_KHR_swapchain\0";
+
+const DESIRED_SWAPCHAIN_LENGTH: u32 = 2;
 
 /// The name of Fathom's window classes `"FATHOM_WNDCLASS"` in UTF-16 as an
 /// array of `u16`s.
@@ -107,6 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 as_cchar_slice(SURFACE_EXTENSION),
                 as_cchar_slice(OS_SURFACE_EXTENSION),
             ];
+
             let has_required = has_required_names(
                 &vk_entry.enumerate_instance_extension_properties(None)?,
                 |e| &e.extension_name,
@@ -115,7 +122,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             for (index, result) in has_required.iter().enumerate() {
                 if !result {
-                    panic!("required Vulkan extension not found: {:?}", required[index]);
+                    panic!("required Vulkan extension not found: {:?}", unsafe {
+                        CStr::from_ptr(required[index].as_ptr())
+                    });
                 }
             }
 
@@ -155,16 +164,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         unsafe { vk_win32_surface_api.create_win32_surface(&surface_ci, None)? }
     };
 
-    let (vk_device, _device_properties, _graphics_queue, _present_queue) = {
+    let (
+        vk_device,
+        vk_physical_device,
+        _device_properties,
+        _graphics_queue,
+        graphics_family,
+        _present_queue,
+        present_family,
+    ) = {
         let selected_device = {
             let mut selected_device = None;
 
             for handle in unsafe { vk_instance.enumerate_physical_devices()? } {
                 let properties = unsafe { vk_instance.get_physical_device_properties(handle) };
-                
+
                 let mut present_family = None;
                 let mut graphics_family = None;
-                
+
                 let queue_families =
                     unsafe { vk_instance.get_physical_device_queue_family_properties(handle) };
                 for (index, queue_family) in queue_families.iter().enumerate() {
@@ -201,27 +218,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 };
 
-                selected_device = Some((handle, properties, present_family, graphics_family));
+                let supports_swapchain = has_required_names(
+                    &unsafe { vk_instance.enumerate_device_extension_properties(handle)? },
+                    |e| &e.extension_name,
+                    &[as_cchar_slice(SWAPCHAIN_EXTENSION)],
+                )[0];
+
+                if !supports_swapchain {
+                    continue;
+                }
+
+                selected_device = Some((handle, properties, graphics_family, present_family));
                 break;
             }
 
             selected_device
         };
 
-        if let Some((handle, properties, graphics_queue_family, present_queue_family)) =
-            selected_device
-        {
+        if let Some((handle, properties, present_family, graphics_family)) = selected_device {
             let queue_priority = 1.0;
             let queue_create_infos = {
                 let mut queue_create_infos = [vk::DeviceQueueCreateInfo {
-                    queue_family_index: graphics_queue_family,
+                    queue_family_index: graphics_family,
                     queue_count: 1,
                     p_queue_priorities: &queue_priority,
                     ..Default::default()
                 }; 2];
 
-                if graphics_queue_family != present_queue_family {
-                    queue_create_infos[1].queue_family_index = present_queue_family;
+                if graphics_family != present_family {
+                    queue_create_infos[1].queue_family_index = present_family;
                 }
 
                 queue_create_infos
@@ -229,18 +254,168 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let device_ci = vk::DeviceCreateInfo {
                 p_queue_create_infos: queue_create_infos.as_ptr(),
-                queue_create_info_count: 1 + (graphics_queue_family != present_queue_family) as u32,
+                queue_create_info_count: 1 + (graphics_family != present_family) as u32,
+                enabled_extension_count: 1,
+                pp_enabled_extension_names: [SWAPCHAIN_EXTENSION.as_ptr().cast()].as_ptr(),
                 ..Default::default()
             };
 
             let device = unsafe { vk_instance.create_device(handle, &device_ci, None)? };
-            let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family, 0) };
-            let present_queue = unsafe { device.get_device_queue(present_queue_family, 0) };
+            let graphics_queue = unsafe { device.get_device_queue(graphics_family, 0) };
+            let present_queue = unsafe { device.get_device_queue(present_family, 0) };
 
-            (device, properties, graphics_queue, present_queue)
+            (
+                device,
+                handle,
+                properties,
+                graphics_queue,
+                graphics_family,
+                present_queue,
+                present_family,
+            )
         } else {
-            todo!("TODO: Handle no device found")
+            // TODO(straivers): explain why
+            panic!("no viable Vulkan device found supporting both graphics and presentation")
         }
+    };
+
+    let vk_swapchain_api = { ash::extensions::khr::Swapchain::new(&vk_instance, &vk_device) };
+
+    let (window_width, window_height) = unsafe {
+        let mut rect: RECT = std::mem::zeroed();
+        GetClientRect(hwnd, &mut rect);
+        (
+            u32::try_from(rect.right).unwrap(),
+            u32::try_from(rect.bottom).unwrap(),
+        )
+    };
+
+    let (vk_swapchain, vk_swapchain_format) = {
+        let format = {
+            let formats = unsafe {
+                vk_surface_api
+                    .get_physical_device_surface_formats(vk_physical_device, window_surface)?
+            };
+
+            assert!(!formats.is_empty());
+
+            formats
+                .iter()
+                .find_map(|f| (f.format == vk::Format::B8G8R8A8_SRGB).then_some(*f))
+                .unwrap_or(formats[0])
+        };
+
+        let present_mode = vk::PresentModeKHR::FIFO;
+
+        let (extent, transform, swapchain_length) = {
+            let capabilities = unsafe {
+                vk_surface_api
+                    .get_physical_device_surface_capabilities(vk_physical_device, window_surface)?
+            };
+
+            let extent = if capabilities.current_extent.width != u32::MAX {
+                capabilities.current_extent
+            } else {
+                vk::Extent2D {
+                    width: window_width.clamp(
+                        capabilities.min_image_extent.width,
+                        capabilities.max_image_extent.width,
+                    ),
+                    height: window_height.clamp(
+                        capabilities.min_image_extent.height,
+                        capabilities.max_image_extent.height,
+                    ),
+                }
+            };
+
+            assert!(extent.width > 0 && extent.height > 0);
+
+            // NOTE(straivers): We want at least 3 images, but may need more if
+            // the driver requires it. Using 1 image more than the driver
+            // requires helps to minimize the chance that the driver will block
+            // on internal operations. Ref:
+            // https://vulkan-tutorial.com/Drawing_a_triangle/Presentation/Swap_chain
+            // retrieved 2022/07/09
+
+            let max_length = if capabilities.max_image_count == 0 {
+                u32::MAX
+            } else {
+                capabilities.max_image_count
+            };
+
+            let length = (capabilities.min_image_count + 1)
+                .max(DESIRED_SWAPCHAIN_LENGTH)
+                .min(max_length);
+
+            debug_assert!(length <= max_length);
+            if max_length >= DESIRED_SWAPCHAIN_LENGTH {
+                debug_assert!(length >= DESIRED_SWAPCHAIN_LENGTH);
+            }
+
+            (extent, capabilities.current_transform, length)
+        };
+
+        let mut swapchain_ci = vk::SwapchainCreateInfoKHR {
+            surface: window_surface,
+            min_image_count: swapchain_length,
+            image_format: format.format,
+            image_color_space: format.color_space,
+            image_extent: extent,
+            image_array_layers: 1,
+            image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            pre_transform: transform,
+            composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
+            present_mode,
+            clipped: vk::TRUE,
+            old_swapchain: vk::SwapchainKHR::null(),
+            ..Default::default()
+        };
+
+        if graphics_family == present_family {
+            swapchain_ci.image_sharing_mode = vk::SharingMode::EXCLUSIVE;
+        } else {
+            swapchain_ci.image_sharing_mode = vk::SharingMode::CONCURRENT;
+            swapchain_ci.queue_family_index_count = 2;
+            swapchain_ci.p_queue_family_indices = [graphics_family, present_family].as_ptr();
+        }
+
+        (
+            unsafe { vk_swapchain_api.create_swapchain(&swapchain_ci, None)? },
+            format,
+        )
+    };
+
+    let vk_swapchain_images = unsafe { vk_swapchain_api.get_swapchain_images(vk_swapchain)? };
+
+    let vk_swapchain_image_views = {
+        let mut views = Vec::with_capacity(vk_swapchain_images.len());
+
+        for image in &vk_swapchain_images {
+            let view_ci = vk::ImageViewCreateInfo {
+                image: *image,
+                view_type: vk::ImageViewType::TYPE_2D,
+                format: vk_swapchain_format.format,
+                components: vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::IDENTITY,
+                    g: vk::ComponentSwizzle::IDENTITY,
+                    b: vk::ComponentSwizzle::IDENTITY,
+                    a: vk::ComponentSwizzle::IDENTITY,
+                },
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                ..Default::default()
+            };
+
+            let view = unsafe { vk_device.create_image_view(&view_ci, None)? };
+            views.push(view);
+        }
+
+        views
     };
 
     unsafe { ShowWindow(hwnd, SW_SHOW) };
@@ -272,8 +447,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     unsafe {
-        vk_device.destroy_device(None);
+        for view in vk_swapchain_image_views {
+            vk_device.destroy_image_view(view, None);
+        }
+
+        vk_swapchain_api.destroy_swapchain(vk_swapchain, None);
         vk_surface_api.destroy_surface(window_surface, None);
+
+        vk_device.destroy_device(None);
         vk_instance.destroy_instance(None);
     }
 
@@ -340,9 +521,7 @@ mod tests {
             as_cchar_slice(b"three\0"),
         ];
 
-        let required = &[
-            as_cchar_slice(b"three\0")
-        ];
+        let required = &[as_cchar_slice(b"three\0")];
 
         let result = has_required_names(available, |i| i, required);
         assert!(result[0]);
