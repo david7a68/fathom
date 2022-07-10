@@ -29,6 +29,9 @@ const SWAPCHAIN_EXTENSION: &[u8] = b"VK_KHR_swapchain\0";
 
 const DESIRED_SWAPCHAIN_LENGTH: u32 = 2;
 
+const UI_FRAG_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.frag.spv"));
+const UI_VERT_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.vert.spv"));
+
 /// The name of Fathom's window classes `"FATHOM_WNDCLASS"` in UTF-16 as an
 /// array of `u16`s.
 const WNDCLASS_NAME: &[u16] = &[
@@ -89,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             application_version: vk::make_api_version(0, 0, 1, 0),
             p_engine_name: "Fathom".as_ptr().cast(),
             engine_version: vk::make_api_version(0, 0, 1, 0),
-            api_version: vk::make_api_version(0, 1, 0, 0),
+            api_version: vk::make_api_version(0, 1, 1, 0),
             ..Default::default()
         };
 
