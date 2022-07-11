@@ -10,12 +10,15 @@ use windows::Win32::{
     UI::WindowsAndMessaging::GetClientRect,
 };
 
-const VALIDATION_LAYER: &[u8] = b"VK_LAYER_KHRONOS_validation\0";
+const VALIDATION_LAYER: *const i8 = b"VK_LAYER_KHRONOS_validation\0".as_ptr().cast();
 
-const SURFACE_EXTENSION: &[u8] = b"VK_KHR_surface\0";
-const OS_SURFACE_EXTENSION: &[u8] = b"VK_KHR_win32_surface\0";
+const INSTANCE_EXTENSIONS: [*const i8; 2] = [
+    b"VK_KHR_surface\0".as_ptr().cast(),
+    #[cfg(target_os = "windows")]
+    b"VK_KHR_win32_surface\0".as_ptr().cast(),
+];
 
-const SWAPCHAIN_EXTENSION: &[u8] = b"VK_KHR_swapchain\0";
+const DEVICE_EXTENSIONS: [*const i8; 1] = [b"VK_KHR_swapchain\0".as_ptr().cast()];
 
 const DESIRED_SWAPCHAIN_LENGTH: u32 = 2;
 
@@ -59,14 +62,8 @@ impl Renderer {
         let entry = unsafe { ash::Entry::load().unwrap() };
 
         let instance = {
-            let app_info = vk::ApplicationInfo {
-                p_application_name: "Fathom".as_ptr().cast(),
-                application_version: vk::make_api_version(0, 0, 1, 0),
-                p_engine_name: "Fathom".as_ptr().cast(),
-                engine_version: vk::make_api_version(0, 0, 1, 0),
-                api_version: vk::make_api_version(0, 1, 1, 0),
-                ..Default::default()
-            };
+            let app_info =
+                vk::ApplicationInfo::builder().api_version(vk::make_api_version(0, 1, 1, 0));
 
             let mut instance_layers = vec![];
 
@@ -75,52 +72,36 @@ impl Renderer {
                 let has_layers = has_required_names(
                     &entry.enumerate_instance_layer_properties().unwrap(),
                     |l| &l.layer_name,
-                    &[as_cchar_slice(VALIDATION_LAYER)],
+                    &[VALIDATION_LAYER],
                 );
 
                 if has_layers[0] {
-                    instance_layers.push(VALIDATION_LAYER.as_ptr().cast());
+                    instance_layers.push(VALIDATION_LAYER);
                 }
             }
 
-            let extensions = {
-                let required = &[
-                    as_cchar_slice(SURFACE_EXTENSION),
-                    as_cchar_slice(OS_SURFACE_EXTENSION),
-                ];
+            let extensions = INSTANCE_EXTENSIONS;
 
+            {
                 let has_required = has_required_names(
                     &entry.enumerate_instance_extension_properties(None).unwrap(),
                     |e| &e.extension_name,
-                    required,
+                    &INSTANCE_EXTENSIONS,
                 );
 
                 for (index, result) in has_required.iter().enumerate() {
                     assert!(
                         result,
                         "required Vulkan extension not found: {:?}",
-                        unsafe { CStr::from_ptr(required[index].as_ptr()) }
+                        unsafe { CStr::from_ptr(extensions[index]) }
                     );
                 }
-
-                &[
-                    SURFACE_EXTENSION.as_ptr().cast(),
-                    OS_SURFACE_EXTENSION.as_ptr().cast(),
-                ]
             };
 
-            let instance_ci = vk::InstanceCreateInfo {
-                p_application_info: &app_info,
-                enabled_layer_count: instance_layers.len() as u32,
-                pp_enabled_layer_names: if instance_layers.is_empty() {
-                    std::ptr::null()
-                } else {
-                    instance_layers.as_ptr()
-                },
-                enabled_extension_count: extensions.len() as u32,
-                pp_enabled_extension_names: extensions.as_ptr(),
-                ..Default::default()
-            };
+            let instance_ci = vk::InstanceCreateInfo::builder()
+                .application_info(&app_info)
+                .enabled_layer_names(&instance_layers)
+                .enabled_extension_names(&extensions);
 
             unsafe { entry.create_instance(&instance_ci, None).unwrap() }
         };
@@ -142,11 +123,9 @@ impl Renderer {
 
     #[cfg(target_os = "windows")]
     pub fn create_swapchain(&mut self, hwnd: HWND, hinstance: HINSTANCE) -> vk::SwapchainKHR {
-        let surface_ci = vk::Win32SurfaceCreateInfoKHR {
-            hinstance: hinstance.0 as _,
-            hwnd: hwnd.0 as _,
-            ..Default::default()
-        };
+        let surface_ci = vk::Win32SurfaceCreateInfoKHR::builder()
+            .hinstance(hinstance.0 as _)
+            .hwnd(hwnd.0 as _);
 
         let surface = unsafe {
             self.os_surface_api
@@ -232,7 +211,7 @@ impl Renderer {
                             .unwrap()
                     },
                     |e| &e.extension_name,
-                    &[as_cchar_slice(SWAPCHAIN_EXTENSION)],
+                    &DEVICE_EXTENSIONS,
                 )[0];
 
                 if !supports_swapchain {
@@ -248,34 +227,29 @@ impl Renderer {
 
         if let Some((physical_device, present_family, graphics_family)) = selected_device {
             let queue_priority = 1.0;
-            let queue_create_infos = {
-                let mut queue_create_infos = [vk::DeviceQueueCreateInfo {
-                    queue_family_index: graphics_family,
-                    queue_count: 1,
-                    p_queue_priorities: &queue_priority,
-                    ..Default::default()
-                }; 2];
 
-                if graphics_family != present_family {
-                    queue_create_infos[1].queue_family_index = present_family;
-                }
+            let queue_ci = [
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(graphics_family)
+                    .queue_priorities(&[queue_priority])
+                    .build(),
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(present_family)
+                    .queue_priorities(&[queue_priority])
+                    .build(),
+            ];
 
-                queue_create_infos
-            };
-
-            let device_ci = vk::DeviceCreateInfo {
-                p_queue_create_infos: queue_create_infos.as_ptr(),
-                queue_create_info_count: 1 + u32::from(graphics_family != present_family),
-                enabled_extension_count: 1,
-                pp_enabled_extension_names: [SWAPCHAIN_EXTENSION.as_ptr().cast()].as_ptr(),
-                ..Default::default()
-            };
+            let num_queues = 1 + usize::from(present_family != graphics_family);
+            let device_ci = vk::DeviceCreateInfo::builder()
+                .queue_create_infos(&queue_ci[0..num_queues])
+                .enabled_extension_names(&DEVICE_EXTENSIONS);
 
             let device = unsafe {
                 self.instance
                     .create_device(physical_device, &device_ci, None)
                     .unwrap()
             };
+
             let graphics_queue = unsafe { device.get_device_queue(graphics_family, 0) };
             let present_queue = unsafe { device.get_device_queue(present_family, 0) };
 
@@ -356,29 +330,26 @@ impl Renderer {
             (extent, capabilities.current_transform, length)
         };
 
-        let mut swapchain_ci = vk::SwapchainCreateInfoKHR {
-            surface,
-            min_image_count: swapchain_length,
-            image_format: format.format,
-            image_color_space: format.color_space,
-            image_extent: extent,
-            image_array_layers: 1,
-            image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
-            pre_transform: transform,
-            composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
-            present_mode: vk::PresentModeKHR::FIFO,
-            clipped: vk::TRUE,
-            ..Default::default()
-        };
+        let concurrent_family_indices = &[device.graphics_family, device.present_family];
+        let swapchain_ci = vk::SwapchainCreateInfoKHR::builder()
+            .surface(surface)
+            .min_image_count(swapchain_length)
+            .image_format(format.format)
+            .image_color_space(format.color_space)
+            .image_extent(extent)
+            .image_array_layers(1)
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .queue_family_indices(concurrent_family_indices)
+            .pre_transform(transform)
+            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+            .present_mode(vk::PresentModeKHR::FIFO)
+            .clipped(true);
 
-        if device.graphics_family == device.present_family {
-            swapchain_ci.image_sharing_mode = vk::SharingMode::EXCLUSIVE;
+        let swapchain_ci = if device.graphics_family == device.present_family {
+            swapchain_ci.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
         } else {
-            swapchain_ci.image_sharing_mode = vk::SharingMode::CONCURRENT;
-            swapchain_ci.queue_family_index_count = 2;
-            swapchain_ci.p_queue_family_indices =
-                [device.graphics_family, device.present_family].as_ptr();
-        }
+            swapchain_ci.image_sharing_mode(vk::SharingMode::CONCURRENT)
+        };
 
         let swapchain = unsafe {
             device
@@ -397,20 +368,18 @@ impl Renderer {
         let image_views = {
             let mut views = Vec::with_capacity(images.len());
             for image in &images {
-                let view_ci = vk::ImageViewCreateInfo {
-                    image: *image,
-                    view_type: vk::ImageViewType::TYPE_2D,
-                    format: format.format,
-                    components: vk::ComponentMapping::default(),
-                    subresource_range: vk::ImageSubresourceRange {
+                let view_ci = vk::ImageViewCreateInfo::builder()
+                    .image(*image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(format.format)
+                    .components(vk::ComponentMapping::default())
+                    .subresource_range(vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
                         base_mip_level: 0,
                         level_count: 1,
                         base_array_layer: 0,
                         layer_count: 1,
-                    },
-                    ..Default::default()
-                };
+                    });
 
                 let view = unsafe { device.device.create_image_view(&view_ci, None).unwrap() };
                 views.push(view);
@@ -449,59 +418,21 @@ impl Drop for Renderer {
     }
 }
 
-fn as_cchar_slice(original: &[u8]) -> &[i8] {
-    unsafe { std::slice::from_raw_parts(original.as_ptr().cast(), original.len()) }
-}
-
 fn has_required_names<T, F: Fn(&T) -> &[c_char], const N: usize>(
     items: &[T],
     to_name: F,
-    names: &[&[c_char]; N],
+    names: &[*const c_char; N],
 ) -> [bool; N] {
     let mut item_set = HashSet::new();
 
     for name in items.iter().map(to_name) {
-        // This is just a simple strnlen. should be fast enough for our purposes here
-        let mut len = 0;
-        while len < name.len() && name[len] != 0 {
-            len += 1;
-        }
-
-        assert!(len < name.len());
-        // +1 to account for the nul terminator
-        item_set.insert(&name[0..len + 1]);
+        item_set.insert(unsafe { CStr::from_ptr(name.as_ptr()) });
     }
 
     let mut results = [false; N];
     for i in 0..names.len() {
-        results[i] = item_set.contains(names[i])
+        results[i] = item_set.contains(unsafe { CStr::from_ptr(names[i]) });
     }
 
     results
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn null_terminated_strings() {
-        assert_eq!(VALIDATION_LAYER.last(), Some(&0));
-        assert_eq!(SURFACE_EXTENSION.last(), Some(&0));
-        assert_eq!(OS_SURFACE_EXTENSION.last(), Some(&0));
-    }
-
-    #[test]
-    fn name_check() {
-        let available = &[
-            as_cchar_slice(b"one\0"),
-            as_cchar_slice(b"two\0"),
-            as_cchar_slice(b"three\0"),
-        ];
-
-        let required = &[as_cchar_slice(b"three\0")];
-
-        let result = has_required_names(available, |i| i, required);
-        assert!(result[0]);
-    }
 }
