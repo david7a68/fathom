@@ -20,11 +20,54 @@ const INSTANCE_EXTENSIONS: [*const i8; 2] = [
 
 const DEVICE_EXTENSIONS: [*const i8; 1] = [b"VK_KHR_swapchain\0".as_ptr().cast()];
 
+const FRAMES_IN_FLIGHT: u32 = 2;
 const DESIRED_SWAPCHAIN_LENGTH: u32 = 2;
 
 const SHADER_MAIN: *const i8 = b"main\0".as_ptr().cast();
 const UI_FRAG_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.frag.spv"));
 const UI_VERT_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.vert.spv"));
+
+struct Device {
+    device: ash::Device,
+    physical_device: vk::PhysicalDevice,
+    swapchain_api: ash::extensions::khr::Swapchain,
+
+    graphics_family: u32,
+    present_family: u32,
+    graphics_queue: vk::Queue,
+    present_queue: vk::Queue,
+
+    command_pool: vk::CommandPool,
+}
+
+struct Pipeline {
+    pipeline: vk::Pipeline,
+    layout: vk::PipelineLayout,
+    render_pass: vk::RenderPass,
+}
+
+struct Swapchain {
+    format: vk::Format,
+    extent: vk::Extent2D,
+    surface: vk::SurfaceKHR,
+    image_views: Vec<vk::ImageView>,
+    frame_buffers: Vec<vk::Framebuffer>,
+
+    current_frame: u32,
+    current_image: u32,
+
+    frames_in_flight: FramesInFlight,
+}
+
+struct FramesInFlight {
+    command_buffers: [vk::CommandBuffer; DESIRED_SWAPCHAIN_LENGTH as usize],
+    /// Semaphores indicating when the swapchain image can be rendered to.
+    acquire_semaphores: [vk::Semaphore; DESIRED_SWAPCHAIN_LENGTH as usize],
+    /// Semaphores indicating when the image is ready to be presented.
+    present_semaphores: [vk::Semaphore; DESIRED_SWAPCHAIN_LENGTH as usize],
+    /// Fences indicating when the command buffer is finished.
+    fences: [vk::Fence; DESIRED_SWAPCHAIN_LENGTH as usize],
+}
 
 pub struct Renderer {
     #[allow(dead_code)]
@@ -39,30 +82,6 @@ pub struct Renderer {
     device: Option<Device>,
     swapchains: HashMap<vk::SwapchainKHR, Swapchain>,
     pipelines: HashMap<vk::Format, Pipeline>,
-}
-
-pub struct Device {
-    device: ash::Device,
-    physical_device: vk::PhysicalDevice,
-    swapchain_api: ash::extensions::khr::Swapchain,
-
-    graphics_family: u32,
-    present_family: u32,
-    graphics_queue: vk::Queue,
-    present_queue: vk::Queue,
-}
-
-pub struct Pipeline {
-    pipeline: vk::Pipeline,
-    layout: vk::PipelineLayout,
-    render_pass: vk::RenderPass,
-}
-
-pub struct Swapchain {
-    format: vk::Format,
-    surface: vk::SurfaceKHR,
-    image_views: Vec<vk::ImageView>,
-    frame_buffers: Vec<vk::Framebuffer>,
 }
 
 impl Renderer {
@@ -162,7 +181,14 @@ impl Renderer {
 
     fn destroy_swapchain_data(&self, handle: vk::SwapchainKHR, mut data: Swapchain) {
         let device = self.device.as_ref().unwrap();
+        let fif = data.frames_in_flight;
+
         unsafe {
+            device
+                .device
+                .wait_for_fences(&fif.fences, true, u64::MAX)
+                .unwrap();
+
             for view in data.image_views.drain(..) {
                 device.device.destroy_image_view(view, None);
             }
@@ -171,9 +197,169 @@ impl Renderer {
                 device.device.destroy_framebuffer(framebuffer, None);
             }
 
+            device
+                .device
+                .free_command_buffers(device.command_pool, &fif.command_buffers);
+
+            for i in 0..FRAMES_IN_FLIGHT as usize {
+                device
+                    .device
+                    .destroy_semaphore(fif.acquire_semaphores[i], None);
+                device
+                    .device
+                    .destroy_semaphore(fif.present_semaphores[i], None);
+                device.device.destroy_fence(fif.fences[i], None);
+            }
+
             device.swapchain_api.destroy_swapchain(handle, None);
             self.surface_api.destroy_surface(data.surface, None);
         }
+    }
+
+    pub fn begin_frame(&mut self, swapchain: vk::SwapchainKHR) {
+        let device = self.device.as_ref().unwrap();
+        let swapchain_data = self.swapchains.get_mut(&swapchain).unwrap();
+
+        let frame_idx = swapchain_data.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
+
+        let fif = &mut swapchain_data.frames_in_flight;
+
+        unsafe {
+            device
+                .device
+                .wait_for_fences(&[fif.fences[frame_idx]], true, u64::MAX)
+                .unwrap();
+            device
+                .device
+                .reset_fences(&[fif.fences[frame_idx]])
+                .unwrap();
+        }
+
+        let (index, _needs_resize) = unsafe {
+            device
+                .swapchain_api
+                .acquire_next_image(
+                    swapchain,
+                    u64::MAX,
+                    fif.acquire_semaphores[frame_idx],
+                    vk::Fence::null(),
+                )
+                .unwrap()
+        };
+
+        swapchain_data.current_image = index;
+    }
+
+    pub fn end_frame(&mut self, swapchain: vk::SwapchainKHR) {
+        let device = self.device.as_ref().unwrap();
+        let swapchain_data = self.swapchains.get_mut(&swapchain).unwrap();
+        let pipeline = self.pipelines.get(&swapchain_data.format).unwrap();
+
+        let frame_idx = swapchain_data.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
+
+        let fif = &mut swapchain_data.frames_in_flight;
+
+        let command_buffer = fif.command_buffers[frame_idx];
+
+        let command_buffer_bi = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        unsafe {
+            device
+                .device
+                .begin_command_buffer(command_buffer, &command_buffer_bi)
+                .unwrap();
+        }
+
+        let clear_colors = [vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.0, 0.0, 0.0, 1.0],
+            },
+        }];
+
+        let render_pass_bi = vk::RenderPassBeginInfo::builder()
+            .render_pass(pipeline.render_pass)
+            .framebuffer(swapchain_data.frame_buffers[frame_idx])
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: swapchain_data.extent,
+            })
+            .clear_values(&clear_colors);
+
+        unsafe {
+            device.device.cmd_begin_render_pass(
+                command_buffer,
+                &render_pass_bi,
+                vk::SubpassContents::INLINE,
+            );
+
+            device.device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.pipeline,
+            );
+        }
+
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: swapchain_data.extent.width as f32,
+            height: swapchain_data.extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+
+        unsafe {
+            device
+                .device
+                .cmd_set_viewport(command_buffer, 0, &[viewport]);
+        }
+
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: swapchain_data.extent,
+        };
+
+        unsafe {
+            device.device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+        }
+
+        unsafe {
+            device.device.cmd_draw(command_buffer, 3, 1, 0, 0);
+            device.device.cmd_end_render_pass(command_buffer);
+            device.device.end_command_buffer(command_buffer).unwrap();
+        }
+
+        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+
+        let submit_info = [vk::SubmitInfo::builder()
+            .command_buffers(&[command_buffer])
+            .wait_semaphores(&[fif.acquire_semaphores[frame_idx]])
+            .signal_semaphores(&[fif.present_semaphores[frame_idx]])
+            .wait_dst_stage_mask(&wait_stages)
+            .build()];
+
+        unsafe {
+            device
+                .device
+                .queue_submit(device.graphics_queue, &submit_info, fif.fences[frame_idx])
+                .unwrap();
+        }
+
+        let present_info = vk::PresentInfoKHR::builder()
+            .wait_semaphores(&[fif.present_semaphores[frame_idx]])
+            .swapchains(&[swapchain])
+            .image_indices(&[swapchain_data.current_image])
+            .build();
+
+        unsafe {
+            device
+                .swapchain_api
+                .queue_present(device.present_queue, &present_info)
+                .unwrap();
+        }
+
+        swapchain_data.current_frame += 1;
     }
 
     fn initialize(&self, surface: vk::SurfaceKHR) -> Device {
@@ -191,7 +377,7 @@ impl Renderer {
                         .get_physical_device_queue_family_properties(physical_device)
                 };
 
-                for (index, queue_family) in queue_families.iter().rev().enumerate() {
+                for (index, queue_family) in queue_families.iter().enumerate().rev() {
                     let index = index.try_into().unwrap();
 
                     if unsafe {
@@ -276,6 +462,14 @@ impl Renderer {
 
         let swapchain_api = { ash::extensions::khr::Swapchain::new(&self.instance, &device) };
 
+        let command_pool = {
+            let pool_ci = vk::CommandPoolCreateInfo::builder()
+                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+                .queue_family_index(graphics_family);
+
+            unsafe { device.create_command_pool(&pool_ci, None).unwrap() }
+        };
+
         Device {
             device,
             physical_device,
@@ -284,6 +478,7 @@ impl Renderer {
             present_family,
             graphics_queue,
             present_queue,
+            command_pool,
         }
     }
 
@@ -315,13 +510,23 @@ impl Renderer {
                 .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .build()];
 
+            let dependencies = [vk::SubpassDependency::builder()
+                .src_subpass(vk::SUBPASS_EXTERNAL)
+                .dst_subpass(0)
+                .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+                .src_access_mask(vk::AccessFlags::NONE)
+                .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                .build()];
+
             let subpass_ci = [vk::SubpassDescription::builder()
                 .color_attachments(&attachment_references)
                 .build()];
 
             let render_pass_ci = vk::RenderPassCreateInfo::builder()
                 .attachments(&render_pass_attachments)
-                .subpasses(&subpass_ci);
+                .subpasses(&subpass_ci)
+                .dependencies(&dependencies);
 
             unsafe { device.create_render_pass(&render_pass_ci, None).unwrap() }
         };
@@ -369,7 +574,7 @@ impl Renderer {
                     .build(),
             ];
 
-            let dynamic_states = [vk::DynamicState::VIEWPORT];
+            let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
 
             let dynamic_state_ci =
                 vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_states);
@@ -592,13 +797,71 @@ impl Renderer {
             frame_buffers
         };
 
+        let frames_in_flight = {
+            let command_buffers = {
+                let mut array = [vk::CommandBuffer::null(); FRAMES_IN_FLIGHT as usize];
+
+                let command_buffer_ai = vk::CommandBufferAllocateInfo::builder()
+                    .command_pool(device.command_pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(FRAMES_IN_FLIGHT)
+                    .build();
+
+                // Note(straivers): This is implemented using the function pointer
+                // directly in order to avoid allocating a `Vec` since we know the
+                // size of the array statically.
+
+                let vk_result = unsafe {
+                    (device.device.fp_v1_0().allocate_command_buffers)(
+                        device.device.handle(),
+                        &command_buffer_ai,
+                        array.as_mut_ptr(),
+                    )
+                };
+
+                if vk_result != vk::Result::SUCCESS {
+                    panic!("failed to allocate command buffers");
+                }
+
+                array
+            };
+
+            let semaphore_ci = vk::SemaphoreCreateInfo::builder();
+            let fence_ci = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
+
+            let mut acquire_semaphores = [vk::Semaphore::null(); FRAMES_IN_FLIGHT as usize];
+            let mut present_semaphores = [vk::Semaphore::null(); FRAMES_IN_FLIGHT as usize];
+            let mut fences = [vk::Fence::null(); FRAMES_IN_FLIGHT as usize];
+
+            for i in 0..FRAMES_IN_FLIGHT as usize {
+                unsafe {
+                    acquire_semaphores[i] =
+                        device.device.create_semaphore(&semaphore_ci, None).unwrap();
+                    present_semaphores[i] =
+                        device.device.create_semaphore(&semaphore_ci, None).unwrap();
+                    fences[i] = device.device.create_fence(&fence_ci, None).unwrap();
+                }
+            }
+
+            FramesInFlight {
+                command_buffers,
+                acquire_semaphores,
+                present_semaphores,
+                fences,
+            }
+        };
+
         self.swapchains.insert(
             swapchain,
             Swapchain {
                 surface,
+                extent,
                 format: format.format,
                 image_views,
                 frame_buffers,
+                current_frame: 0,
+                current_image: 0,
+                frames_in_flight,
             },
         );
         swapchain
@@ -608,6 +871,10 @@ impl Renderer {
 impl Drop for Renderer {
     fn drop(&mut self) {
         if let Some(device) = self.device.take() {
+            unsafe {
+                device.device.device_wait_idle().unwrap();
+            }
+
             for (handle, data) in std::mem::take(&mut self.swapchains) {
                 self.destroy_swapchain_data(handle, data);
             }
@@ -623,6 +890,9 @@ impl Drop for Renderer {
             }
 
             unsafe {
+                device
+                    .device
+                    .destroy_command_pool(device.command_pool, None);
                 device.device.destroy_device(None);
             }
         }

@@ -99,6 +99,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 DispatchMessageW(&msg);
             }
         }
+
+        renderer.begin_frame(swapchain);
+        renderer.end_frame(swapchain);
     }
 
     renderer.destroy_swapchain(swapchain);
