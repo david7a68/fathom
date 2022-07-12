@@ -22,6 +22,7 @@ const DEVICE_EXTENSIONS: [*const i8; 1] = [b"VK_KHR_swapchain\0".as_ptr().cast()
 
 const DESIRED_SWAPCHAIN_LENGTH: u32 = 2;
 
+const SHADER_MAIN: *const i8 = b"main\0".as_ptr().cast();
 const UI_FRAG_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.frag.spv"));
 const UI_VERT_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.vert.spv"));
 
@@ -37,6 +38,7 @@ pub struct Renderer {
 
     device: Option<Device>,
     swapchains: HashMap<vk::SwapchainKHR, Swapchain>,
+    pipelines: HashMap<vk::Format, Pipeline>,
 }
 
 pub struct Device {
@@ -50,11 +52,17 @@ pub struct Device {
     present_queue: vk::Queue,
 }
 
+pub struct Pipeline {
+    pipeline: vk::Pipeline,
+    layout: vk::PipelineLayout,
+    render_pass: vk::RenderPass,
+}
+
 pub struct Swapchain {
     format: vk::Format,
     surface: vk::SurfaceKHR,
-    images: Vec<vk::Image>,
     image_views: Vec<vk::ImageView>,
+    frame_buffers: Vec<vk::Framebuffer>,
 }
 
 impl Renderer {
@@ -118,6 +126,7 @@ impl Renderer {
             os_surface_api,
             device: None,
             swapchains: HashMap::new(),
+            pipelines: HashMap::new(),
         }
     }
 
@@ -158,12 +167,16 @@ impl Renderer {
                 device.device.destroy_image_view(view, None);
             }
 
+            for framebuffer in data.frame_buffers.drain(..) {
+                device.device.destroy_framebuffer(framebuffer, None);
+            }
+
             device.swapchain_api.destroy_swapchain(handle, None);
             self.surface_api.destroy_surface(data.surface, None);
         }
     }
 
-    fn create_device(&self, surface: vk::SurfaceKHR) -> Device {
+    fn initialize(&self, surface: vk::SurfaceKHR) -> Device {
         let selected_device = {
             let mut selected_device = None;
 
@@ -225,7 +238,14 @@ impl Renderer {
             selected_device
         };
 
-        if let Some((physical_device, present_family, graphics_family)) = selected_device {
+        let (physical_device, graphics_family, present_family) =
+            if let Some((physical_device, present_family, graphics_family)) = selected_device {
+                (physical_device, graphics_family, present_family)
+            } else {
+                panic!("no suitable device found");
+            };
+
+        let device = {
             let queue_priority = 1.0;
 
             let queue_ci = [
@@ -244,29 +264,179 @@ impl Renderer {
                 .queue_create_infos(&queue_ci[0..num_queues])
                 .enabled_extension_names(&DEVICE_EXTENSIONS);
 
-            let device = unsafe {
+            unsafe {
                 self.instance
                     .create_device(physical_device, &device_ci, None)
                     .unwrap()
+            }
+        };
+
+        let graphics_queue = unsafe { device.get_device_queue(graphics_family, 0) };
+        let present_queue = unsafe { device.get_device_queue(present_family, 0) };
+
+        let swapchain_api = { ash::extensions::khr::Swapchain::new(&self.instance, &device) };
+
+        Device {
+            device,
+            physical_device,
+            swapchain_api,
+            graphics_family,
+            present_family,
+            graphics_queue,
+            present_queue,
+        }
+    }
+
+    fn create_pipeline(device: &ash::Device, swapchain_format: vk::Format) -> Pipeline {
+        let layout = {
+            let pipeline_layout_ci = vk::PipelineLayoutCreateInfo::builder();
+
+            unsafe {
+                device
+                    .create_pipeline_layout(&pipeline_layout_ci, None)
+                    .unwrap()
+            }
+        };
+
+        let render_pass = {
+            let render_pass_attachments = [vk::AttachmentDescription::builder()
+                .format(swapchain_format)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                .build()];
+
+            let attachment_references = [vk::AttachmentReference::builder()
+                .attachment(0)
+                .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .build()];
+
+            let subpass_ci = [vk::SubpassDescription::builder()
+                .color_attachments(&attachment_references)
+                .build()];
+
+            let render_pass_ci = vk::RenderPassCreateInfo::builder()
+                .attachments(&render_pass_attachments)
+                .subpasses(&subpass_ci);
+
+            unsafe { device.create_render_pass(&render_pass_ci, None).unwrap() }
+        };
+
+        let pipeline = {
+            let vertex_shader = {
+                debug_assert_eq!(UI_VERT_SHADER_SPV.len() % 4, 0);
+                let shader_words = unsafe {
+                    std::slice::from_raw_parts(
+                        UI_VERT_SHADER_SPV.as_ptr().cast(),
+                        UI_VERT_SHADER_SPV.len() / 4,
+                    )
+                };
+
+                let module_ci = vk::ShaderModuleCreateInfo::builder().code(shader_words);
+
+                unsafe { device.create_shader_module(&module_ci, None).unwrap() }
             };
 
-            let graphics_queue = unsafe { device.get_device_queue(graphics_family, 0) };
-            let present_queue = unsafe { device.get_device_queue(present_family, 0) };
+            let fragment_shader = {
+                debug_assert_eq!(UI_FRAG_SHADER_SPV.len() % 4, 0);
+                let shader_words = unsafe {
+                    std::slice::from_raw_parts(
+                        UI_FRAG_SHADER_SPV.as_ptr().cast(),
+                        UI_FRAG_SHADER_SPV.len() / 4,
+                    )
+                };
 
-            let swapchain_api = { ash::extensions::khr::Swapchain::new(&self.instance, &device) };
+                let module_ci = vk::ShaderModuleCreateInfo::builder().code(shader_words);
 
-            Device {
-                device,
-                physical_device,
-                swapchain_api,
-                graphics_family,
-                present_family,
-                graphics_queue,
-                present_queue,
+                unsafe { device.create_shader_module(&module_ci, None).unwrap() }
+            };
+
+            let shader_main = unsafe { CStr::from_ptr(SHADER_MAIN) };
+            let shader_stage_ci = [
+                vk::PipelineShaderStageCreateInfo::builder()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(vertex_shader)
+                    .name(shader_main)
+                    .build(),
+                vk::PipelineShaderStageCreateInfo::builder()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(fragment_shader)
+                    .name(shader_main)
+                    .build(),
+            ];
+
+            let dynamic_states = [vk::DynamicState::VIEWPORT];
+
+            let dynamic_state_ci =
+                vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_states);
+
+            let vertex_input_ci = vk::PipelineVertexInputStateCreateInfo::builder();
+
+            let input_assembly_ci = vk::PipelineInputAssemblyStateCreateInfo::builder()
+                .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+
+            let viewport_state_ci = vk::PipelineViewportStateCreateInfo::builder()
+                .viewport_count(1)
+                .scissor_count(1);
+
+            let rasterization_ci = vk::PipelineRasterizationStateCreateInfo::builder()
+                .depth_clamp_enable(false)
+                .rasterizer_discard_enable(false)
+                .polygon_mode(vk::PolygonMode::FILL)
+                .line_width(1.0)
+                .cull_mode(vk::CullModeFlags::BACK)
+                .front_face(vk::FrontFace::CLOCKWISE)
+                .depth_bias_enable(false);
+
+            let multisample_ci = vk::PipelineMultisampleStateCreateInfo::builder()
+                .sample_shading_enable(false)
+                .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+            let framebuffer_blend_ci = [vk::PipelineColorBlendAttachmentState::builder()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(false)
+                .build()];
+
+            let global_blend_ci = vk::PipelineColorBlendStateCreateInfo::builder()
+                .logic_op_enable(false)
+                .attachments(&framebuffer_blend_ci);
+
+            let pipeline_ci = vk::GraphicsPipelineCreateInfo::builder()
+                .stages(&shader_stage_ci)
+                .vertex_input_state(&vertex_input_ci)
+                .input_assembly_state(&input_assembly_ci)
+                .viewport_state(&viewport_state_ci)
+                .rasterization_state(&rasterization_ci)
+                .multisample_state(&multisample_ci)
+                .color_blend_state(&global_blend_ci)
+                .dynamic_state(&dynamic_state_ci)
+                .layout(layout)
+                .render_pass(render_pass)
+                .subpass(0)
+                .build();
+
+            let pipeline = unsafe {
+                device
+                    .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_ci], None)
+                    .unwrap()[0]
+            };
+
+            unsafe {
+                device.destroy_shader_module(vertex_shader, None);
+                device.destroy_shader_module(fragment_shader, None);
             }
-        } else {
-            // TODO(straivers): explain why
-            panic!("no viable Vulkan device found supporting both graphics and presentation")
+
+            pipeline
+        };
+
+        Pipeline {
+            pipeline,
+            layout,
+            render_pass,
         }
     }
 
@@ -275,7 +445,7 @@ impl Renderer {
         surface: vk::SurfaceKHR,
         extent: vk::Extent2D,
     ) -> vk::SwapchainKHR {
-        let device = self.device.get_or_insert(self.create_device(surface));
+        let device = self.device.get_or_insert(self.initialize(surface));
 
         let format = {
             let formats = unsafe {
@@ -358,15 +528,16 @@ impl Renderer {
                 .unwrap()
         };
 
-        let images = unsafe {
-            device
-                .swapchain_api
-                .get_swapchain_images(swapchain)
-                .unwrap()
-        };
-
         let image_views = {
+            let images = unsafe {
+                device
+                    .swapchain_api
+                    .get_swapchain_images(swapchain)
+                    .unwrap()
+            };
+
             let mut views = Vec::with_capacity(images.len());
+
             for image in &images {
                 let view_ci = vk::ImageViewCreateInfo::builder()
                     .image(*image)
@@ -387,13 +558,47 @@ impl Renderer {
             views
         };
 
+        let pipeline = if let Some(pipeline) = self.pipelines.get(&format.format) {
+            pipeline
+        } else {
+            self.pipelines.insert(
+                format.format,
+                Self::create_pipeline(&device.device, format.format),
+            );
+            self.pipelines.get(&format.format).unwrap()
+        };
+
+        let frame_buffers = {
+            let mut frame_buffers = Vec::with_capacity(image_views.len());
+
+            for view in &image_views {
+                let attachments = [*view];
+
+                let framebuffer_ci = vk::FramebufferCreateInfo::builder()
+                    .render_pass(pipeline.render_pass)
+                    .attachments(&attachments)
+                    .width(extent.width)
+                    .height(extent.height)
+                    .layers(1);
+
+                let framebuffer = unsafe {
+                    device
+                        .device
+                        .create_framebuffer(&framebuffer_ci, None)
+                        .unwrap()
+                };
+                frame_buffers.push(framebuffer);
+            }
+            frame_buffers
+        };
+
         self.swapchains.insert(
             swapchain,
             Swapchain {
                 surface,
                 format: format.format,
-                images,
                 image_views,
+                frame_buffers,
             },
         );
         swapchain
@@ -405,6 +610,16 @@ impl Drop for Renderer {
         if let Some(device) = self.device.take() {
             for (handle, data) in std::mem::take(&mut self.swapchains) {
                 self.destroy_swapchain_data(handle, data);
+            }
+
+            for (_, pipeline) in std::mem::take(&mut self.pipelines) {
+                unsafe {
+                    device.device.destroy_pipeline(pipeline.pipeline, None);
+                    device
+                        .device
+                        .destroy_render_pass(pipeline.render_pass, None);
+                    device.device.destroy_pipeline_layout(pipeline.layout, None);
+                }
             }
 
             unsafe {
