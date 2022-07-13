@@ -274,32 +274,27 @@ impl Renderer {
 
         let command_buffer = fif.command_buffers[frame_idx];
 
-        let command_buffer_bi = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
         unsafe {
-            vkdevice.begin_command_buffer(command_buffer, &command_buffer_bi)?;
-        }
+            vkdevice.begin_command_buffer(
+                command_buffer,
+                &vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )?;
 
-        let clear_colors = [vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: [0.0, 0.0, 0.0, 1.0],
-            },
-        }];
-
-        let render_pass_bi = vk::RenderPassBeginInfo::builder()
-            .render_pass(pipeline.render_pass)
-            .framebuffer(swapchain_data.frame_buffers[frame_idx])
-            .render_area(vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: swapchain_data.extent,
-            })
-            .clear_values(&clear_colors);
-
-        unsafe {
             vkdevice.cmd_begin_render_pass(
                 command_buffer,
-                &render_pass_bi,
+                &vk::RenderPassBeginInfo::builder()
+                    .render_pass(pipeline.render_pass)
+                    .framebuffer(swapchain_data.frame_buffers[frame_idx])
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D { x: 0, y: 0 },
+                        extent: swapchain_data.extent,
+                    })
+                    .clear_values(&[vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.0, 0.0, 0.0, 1.0],
+                        },
+                    }]),
                 vk::SubpassContents::INLINE,
             );
 
@@ -308,53 +303,52 @@ impl Renderer {
                 vk::PipelineBindPoint::GRAPHICS,
                 pipeline.pipeline,
             );
-        }
 
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: swapchain_data.extent.width as f32,
-            height: swapchain_data.extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
+            vkdevice.cmd_set_viewport(
+                command_buffer,
+                0,
+                std::slice::from_ref(&vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: swapchain_data.extent.width as f32,
+                    height: swapchain_data.extent.height as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }),
+            );
 
-        let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: swapchain_data.extent,
-        };
+            vkdevice.cmd_set_scissor(
+                command_buffer,
+                0,
+                std::slice::from_ref(&vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: swapchain_data.extent,
+                }),
+            );
 
-        unsafe {
-            vkdevice.cmd_set_viewport(command_buffer, 0, std::slice::from_ref(&viewport));
-            vkdevice.cmd_set_scissor(command_buffer, 0, std::slice::from_ref(&scissor));
             vkdevice.cmd_draw(command_buffer, 3, 1, 0, 0);
             vkdevice.cmd_end_render_pass(command_buffer);
             vkdevice.end_command_buffer(command_buffer)?;
-        }
 
-        let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+            let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+            vkdevice.queue_submit(
+                device.graphics_queue,
+                &[vk::SubmitInfo::builder()
+                    .command_buffers(&[command_buffer])
+                    .wait_semaphores(&[fif.acquire_semaphores[frame_idx]])
+                    .signal_semaphores(&[fif.present_semaphores[frame_idx]])
+                    .wait_dst_stage_mask(&wait_stages)
+                    .build()],
+                fif.fences[frame_idx],
+            )?;
 
-        let submit_info = [vk::SubmitInfo::builder()
-            .command_buffers(&[command_buffer])
-            .wait_semaphores(&[fif.acquire_semaphores[frame_idx]])
-            .signal_semaphores(&[fif.present_semaphores[frame_idx]])
-            .wait_dst_stage_mask(&wait_stages)
-            .build()];
-
-        unsafe {
-            vkdevice.queue_submit(device.graphics_queue, &submit_info, fif.fences[frame_idx])?;
-        }
-
-        let present_info = vk::PresentInfoKHR::builder()
-            .wait_semaphores(&[fif.present_semaphores[frame_idx]])
-            .swapchains(&[swapchain])
-            .image_indices(&[swapchain_data.current_image])
-            .build();
-
-        unsafe {
-            device
-                .swapchain_api
-                .queue_present(device.present_queue, &present_info)?;
+            device.swapchain_api.queue_present(
+                device.present_queue,
+                &vk::PresentInfoKHR::builder()
+                    .wait_semaphores(&[fif.present_semaphores[frame_idx]])
+                    .swapchains(&[swapchain])
+                    .image_indices(&[swapchain_data.current_image]),
+            )?;
         }
 
         swapchain_data.current_frame += 1;
@@ -444,10 +438,7 @@ impl Renderer {
                 .queue_create_infos(&queue_ci[0..num_queues])
                 .enabled_extension_names(&DEVICE_EXTENSIONS);
 
-            unsafe {
-                self.instance
-                    .create_device(gpu, &device_ci, None)?
-            }
+            unsafe { self.instance.create_device(gpu, &device_ci, None)? }
         };
 
         let graphics_queue = unsafe { device.get_device_queue(graphics_family, 0) };
@@ -485,69 +476,58 @@ impl Renderer {
             unsafe { device.create_pipeline_layout(&pipeline_layout_ci, None)? }
         };
 
-        let render_pass = {
-            let render_pass_attachments = vk::AttachmentDescription::builder()
-                .format(swapchain_format)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .load_op(vk::AttachmentLoadOp::CLEAR)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-                .initial_layout(vk::ImageLayout::UNDEFINED)
-                .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                .build();
-
-            let attachment_references = vk::AttachmentReference::builder()
-                .attachment(0)
-                .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .build();
-
-            let dependencies = vk::SubpassDependency::builder()
-                .src_subpass(vk::SUBPASS_EXTERNAL)
-                .dst_subpass(0)
-                .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-                .src_access_mask(vk::AccessFlags::NONE)
-                .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                .build();
-
-            let subpass_ci = vk::SubpassDescription::builder()
-                .color_attachments(std::slice::from_ref(&attachment_references))
-                .build();
-
-            let render_pass_ci = vk::RenderPassCreateInfo::builder()
-                .attachments(std::slice::from_ref(&render_pass_attachments))
-                .subpasses(std::slice::from_ref(&subpass_ci))
-                .dependencies(std::slice::from_ref(&dependencies));
-
-            unsafe { device.create_render_pass(&render_pass_ci, None)? }
+        let render_pass = unsafe {
+            device.create_render_pass(
+                &vk::RenderPassCreateInfo::builder()
+                    .attachments(&[vk::AttachmentDescription {
+                        flags: vk::AttachmentDescriptionFlags::empty(),
+                        format: swapchain_format,
+                        samples: vk::SampleCountFlags::TYPE_1,
+                        load_op: vk::AttachmentLoadOp::CLEAR,
+                        store_op: vk::AttachmentStoreOp::STORE,
+                        stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
+                        stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
+                        initial_layout: vk::ImageLayout::UNDEFINED,
+                        final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+                    }])
+                    .subpasses(&[vk::SubpassDescription::builder()
+                        .color_attachments(&[vk::AttachmentReference {
+                            attachment: 0,
+                            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                        }])
+                        .build()])
+                    .dependencies(&[vk::SubpassDependency {
+                        src_subpass: vk::SUBPASS_EXTERNAL,
+                        dst_subpass: 0,
+                        src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                        src_access_mask: vk::AccessFlags::NONE,
+                        dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                        dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                        dependency_flags: vk::DependencyFlags::empty(),
+                    }]),
+                None,
+            )?
         };
 
         let pipeline = {
-            let vertex_shader = {
-                debug_assert_eq!(UI_VERT_SHADER_SPV.len() % 4, 0);
-                let shader_words = unsafe {
-                    std::slice::from_raw_parts(
+            let vertex_shader = unsafe {
+                device.create_shader_module(
+                    &vk::ShaderModuleCreateInfo::builder().code(std::slice::from_raw_parts(
                         UI_VERT_SHADER_SPV.as_ptr().cast(),
                         UI_VERT_SHADER_SPV.len() / 4,
-                    )
-                };
-
-                let module_ci = vk::ShaderModuleCreateInfo::builder().code(shader_words);
-                unsafe { device.create_shader_module(&module_ci, None)? }
+                    )),
+                    None,
+                )?
             };
 
-            let fragment_shader = {
-                debug_assert_eq!(UI_FRAG_SHADER_SPV.len() % 4, 0);
-                let shader_words = unsafe {
-                    std::slice::from_raw_parts(
+            let fragment_shader = unsafe {
+                device.create_shader_module(
+                    &vk::ShaderModuleCreateInfo::builder().code(std::slice::from_raw_parts(
                         UI_FRAG_SHADER_SPV.as_ptr().cast(),
                         UI_FRAG_SHADER_SPV.len() / 4,
-                    )
-                };
-
-                let module_ci = vk::ShaderModuleCreateInfo::builder().code(shader_words);
-                unsafe { device.create_shader_module(&module_ci, None)? }
+                    )),
+                    None,
+                )?
             };
 
             let shader_main = unsafe { CStr::from_ptr(SHADER_MAIN) };
@@ -841,8 +821,10 @@ impl Renderer {
 impl Drop for Renderer {
     fn drop(&mut self) {
         if let Some(device) = self.device.take() {
+            let vkdevice = &device.device;
+
             unsafe {
-                device.device.device_wait_idle().unwrap();
+                vkdevice.device_wait_idle().unwrap();
             }
 
             for (handle, data) in std::mem::take(&mut self.swapchains) {
@@ -851,19 +833,15 @@ impl Drop for Renderer {
 
             for (_, pipeline) in std::mem::take(&mut self.pipelines) {
                 unsafe {
-                    device.device.destroy_pipeline(pipeline.pipeline, None);
-                    device
-                        .device
-                        .destroy_render_pass(pipeline.render_pass, None);
-                    device.device.destroy_pipeline_layout(pipeline.layout, None);
+                    vkdevice.destroy_pipeline(pipeline.pipeline, None);
+                    vkdevice.destroy_render_pass(pipeline.render_pass, None);
+                    vkdevice.destroy_pipeline_layout(pipeline.layout, None);
                 }
             }
 
             unsafe {
-                device
-                    .device
-                    .destroy_command_pool(device.command_pool, None);
-                device.device.destroy_device(None);
+                vkdevice.destroy_command_pool(device.command_pool, None);
+                vkdevice.destroy_device(None);
             }
         }
 
