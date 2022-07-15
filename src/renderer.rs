@@ -1,3 +1,6 @@
+mod error;
+mod pipeline;
+
 use std::{
     collections::{HashMap, HashSet},
     ffi::CStr,
@@ -9,6 +12,8 @@ use windows::Win32::{
     Foundation::{HINSTANCE, HWND, RECT},
     UI::WindowsAndMessaging::GetClientRect,
 };
+
+use self::error::Error;
 
 const VALIDATION_LAYER: *const i8 = b"VK_LAYER_KHRONOS_validation\0".as_ptr().cast();
 
@@ -23,10 +28,6 @@ const DEVICE_EXTENSIONS: [*const i8; 1] = [b"VK_KHR_swapchain\0".as_ptr().cast()
 const FRAMES_IN_FLIGHT: u32 = 2;
 const DESIRED_SWAPCHAIN_LENGTH: u32 = 2;
 
-const SHADER_MAIN: *const i8 = b"main\0".as_ptr().cast();
-const UI_FRAG_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.frag.spv"));
-const UI_VERT_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.vert.spv"));
-
 struct Device {
     device: ash::Device,
     gpu: vk::PhysicalDevice,
@@ -38,12 +39,6 @@ struct Device {
     present_queue: vk::Queue,
 
     command_pool: vk::CommandPool,
-}
-
-struct Pipeline {
-    pipeline: vk::Pipeline,
-    layout: vk::PipelineLayout,
-    render_pass: vk::RenderPass,
 }
 
 struct Swapchain {
@@ -72,17 +67,6 @@ struct FramesInFlight {
     fences: [vk::Fence; DESIRED_SWAPCHAIN_LENGTH as usize],
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("a compatible Vulkan driver was not found")]
-    NoVulkanLibrary,
-    #[error("no suitable GPU was found")]
-    NoSuitableGpu,
-
-    #[error("{0}")]
-    Vulkan(#[from] vk::Result),
-}
-
 pub struct Renderer {
     #[allow(dead_code)]
     entry: ash::Entry,
@@ -95,7 +79,7 @@ pub struct Renderer {
 
     device: Option<Device>,
     swapchains: HashMap<vk::SwapchainKHR, (Swapchain, RenderState)>,
-    pipelines: HashMap<vk::Format, Pipeline>,
+    pipelines: HashMap<vk::Format, pipeline::Pipeline>,
 }
 
 impl Renderer {
@@ -246,8 +230,8 @@ impl Renderer {
         let frame_idx = swapchain.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
         let fif = &swapchain.frames_in_flight;
 
-        let command_buffer = record_pipeline_draw(
-            device,
+        let command_buffer = pipeline::record_draw(
+            &device.device,
             pipeline,
             render_state.command_buffers[frame_idx],
             render_state.frame_buffers[frame_idx],
@@ -602,7 +586,7 @@ fn destroy_swapchain(
 
 fn init_render_state(
     device: &Device,
-    pipelines: &mut HashMap<vk::Format, Pipeline>,
+    pipelines: &mut HashMap<vk::Format, pipeline::Pipeline>,
     swapchain_format: vk::Format,
     image_views: &[vk::ImageView],
     image_extent: vk::Extent2D,
@@ -637,7 +621,7 @@ fn init_render_state(
     } else {
         pipelines.insert(
             swapchain_format,
-            create_pipeline(vkdevice, swapchain_format)?,
+            pipeline::create(vkdevice, swapchain_format)?,
         );
         pipelines.get(&swapchain_format).unwrap()
     };
@@ -673,225 +657,4 @@ fn destroy_render_state(device: &Device, mut state: RenderState) {
             vkdevice.destroy_framebuffer(framebuffer, None);
         }
     }
-}
-
-fn create_pipeline(device: &ash::Device, swapchain_format: vk::Format) -> Result<Pipeline, Error> {
-    let layout = {
-        let pipeline_layout_ci = vk::PipelineLayoutCreateInfo::builder();
-        unsafe { device.create_pipeline_layout(&pipeline_layout_ci, None)? }
-    };
-
-    let render_pass = {
-        let attachment_descriptions = [vk::AttachmentDescription {
-            flags: vk::AttachmentDescriptionFlags::empty(),
-            format: swapchain_format,
-            samples: vk::SampleCountFlags::TYPE_1,
-            load_op: vk::AttachmentLoadOp::CLEAR,
-            store_op: vk::AttachmentStoreOp::STORE,
-            stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
-            stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
-            initial_layout: vk::ImageLayout::UNDEFINED,
-            final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-        }];
-
-        let subpass_descriptions = [vk::SubpassDescription::builder()
-            .color_attachments(&[vk::AttachmentReference {
-                attachment: 0,
-                layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            }])
-            .build()];
-
-        let subpass_dependencies = [vk::SubpassDependency {
-            src_subpass: vk::SUBPASS_EXTERNAL,
-            dst_subpass: 0,
-            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: vk::AccessFlags::NONE,
-            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            dependency_flags: vk::DependencyFlags::empty(),
-        }];
-
-        let render_pass_ci = vk::RenderPassCreateInfo::builder()
-            .attachments(&attachment_descriptions)
-            .subpasses(&subpass_descriptions)
-            .dependencies(&subpass_dependencies);
-
-        unsafe { device.create_render_pass(&render_pass_ci, None) }?
-    };
-
-    let pipeline = {
-        let vertex_shader = unsafe {
-            device.create_shader_module(
-                &vk::ShaderModuleCreateInfo::builder().code(std::slice::from_raw_parts(
-                    UI_VERT_SHADER_SPV.as_ptr().cast(),
-                    UI_VERT_SHADER_SPV.len() / 4,
-                )),
-                None,
-            )?
-        };
-
-        let fragment_shader = unsafe {
-            device.create_shader_module(
-                &vk::ShaderModuleCreateInfo::builder().code(std::slice::from_raw_parts(
-                    UI_FRAG_SHADER_SPV.as_ptr().cast(),
-                    UI_FRAG_SHADER_SPV.len() / 4,
-                )),
-                None,
-            )?
-        };
-
-        let shader_main = unsafe { CStr::from_ptr(SHADER_MAIN) };
-        let shader_stage_ci = [
-            vk::PipelineShaderStageCreateInfo::builder()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(vertex_shader)
-                .name(shader_main)
-                .build(),
-            vk::PipelineShaderStageCreateInfo::builder()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(fragment_shader)
-                .name(shader_main)
-                .build(),
-        ];
-
-        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-
-        let dynamic_state_ci =
-            vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_states);
-
-        let vertex_input_ci = vk::PipelineVertexInputStateCreateInfo::builder();
-
-        let input_assembly_ci = vk::PipelineInputAssemblyStateCreateInfo::builder()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-
-        let viewport_state_ci = vk::PipelineViewportStateCreateInfo::builder()
-            .viewport_count(1)
-            .scissor_count(1);
-
-        let rasterization_ci = vk::PipelineRasterizationStateCreateInfo::builder()
-            .depth_clamp_enable(false)
-            .rasterizer_discard_enable(false)
-            .polygon_mode(vk::PolygonMode::FILL)
-            .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::BACK)
-            .front_face(vk::FrontFace::CLOCKWISE)
-            .depth_bias_enable(false);
-
-        let multisample_ci = vk::PipelineMultisampleStateCreateInfo::builder()
-            .sample_shading_enable(false)
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-
-        let framebuffer_blend_ci = vk::PipelineColorBlendAttachmentState::builder()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(false)
-            .build();
-
-        let global_blend_ci = vk::PipelineColorBlendStateCreateInfo::builder()
-            .logic_op_enable(false)
-            .attachments(std::slice::from_ref(&framebuffer_blend_ci));
-
-        let pipeline_ci = vk::GraphicsPipelineCreateInfo::builder()
-            .stages(&shader_stage_ci)
-            .vertex_input_state(&vertex_input_ci)
-            .input_assembly_state(&input_assembly_ci)
-            .viewport_state(&viewport_state_ci)
-            .rasterization_state(&rasterization_ci)
-            .multisample_state(&multisample_ci)
-            .color_blend_state(&global_blend_ci)
-            .dynamic_state(&dynamic_state_ci)
-            .layout(layout)
-            .render_pass(render_pass)
-            .subpass(0)
-            .build();
-
-        let pipeline = match unsafe {
-            device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_ci], None)
-        } {
-            Ok(pipelines) => pipelines[0],
-            Err((_, err)) => {
-                return Err(Error::Vulkan(err));
-            }
-        };
-
-        unsafe {
-            device.destroy_shader_module(vertex_shader, None);
-            device.destroy_shader_module(fragment_shader, None);
-        }
-
-        pipeline
-    };
-
-    Ok(Pipeline {
-        pipeline,
-        layout,
-        render_pass,
-    })
-}
-
-fn record_pipeline_draw(
-    device: &Device,
-    pipeline: &Pipeline,
-    command_buffer: vk::CommandBuffer,
-    frame_buffer: vk::Framebuffer,
-    viewport: vk::Extent2D,
-) -> Result<vk::CommandBuffer, Error> {
-    let vkdevice = &device.device;
-    unsafe {
-        vkdevice.begin_command_buffer(
-            command_buffer,
-            &vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-        )?;
-
-        vkdevice.cmd_begin_render_pass(
-            command_buffer,
-            &vk::RenderPassBeginInfo::builder()
-                .render_pass(pipeline.render_pass)
-                .framebuffer(frame_buffer)
-                .render_area(vk::Rect2D {
-                    offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: viewport,
-                })
-                .clear_values(&[vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        float32: [0.0, 0.0, 0.0, 1.0],
-                    },
-                }]),
-            vk::SubpassContents::INLINE,
-        );
-
-        vkdevice.cmd_bind_pipeline(
-            command_buffer,
-            vk::PipelineBindPoint::GRAPHICS,
-            pipeline.pipeline,
-        );
-
-        vkdevice.cmd_set_viewport(
-            command_buffer,
-            0,
-            std::slice::from_ref(&vk::Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: viewport.width as f32,
-                height: viewport.height as f32,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            }),
-        );
-
-        vkdevice.cmd_set_scissor(
-            command_buffer,
-            0,
-            std::slice::from_ref(&vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: viewport,
-            }),
-        );
-
-        vkdevice.cmd_draw(command_buffer, 3, 1, 0, 0);
-        vkdevice.cmd_end_render_pass(command_buffer);
-        vkdevice.end_command_buffer(command_buffer)?;
-    }
-
-    Ok(command_buffer)
 }
