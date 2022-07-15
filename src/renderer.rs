@@ -14,7 +14,10 @@ use windows::Win32::{
     UI::WindowsAndMessaging::GetClientRect,
 };
 
-use self::{error::Error, swapchain::{FRAMES_IN_FLIGHT, Swapchain, DESIRED_SWAPCHAIN_LENGTH}};
+use self::{
+    error::Error,
+    swapchain::{Swapchain, DESIRED_SWAPCHAIN_LENGTH, FRAMES_IN_FLIGHT},
+};
 
 const VALIDATION_LAYER: *const i8 = b"VK_LAYER_KHRONOS_validation\0".as_ptr().cast();
 
@@ -25,7 +28,6 @@ const INSTANCE_EXTENSIONS: [*const i8; 2] = [
 ];
 
 const DEVICE_EXTENSIONS: [*const i8; 1] = [b"VK_KHR_swapchain\0".as_ptr().cast()];
-
 
 struct Device {
     device: ash::Device,
@@ -44,7 +46,6 @@ struct RenderState {
     command_buffers: [vk::CommandBuffer; FRAMES_IN_FLIGHT as usize],
     frame_buffers: Vec<vk::Framebuffer>,
 }
-
 
 pub struct Renderer {
     #[allow(dead_code)]

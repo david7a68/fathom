@@ -1,4 +1,4 @@
-use shaderc::{self, ShaderKind, CompileOptions, TargetEnv, EnvVersion};
+use shaderc::{self, CompileOptions, EnvVersion, ShaderKind, TargetEnv};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=resources/shaders");
@@ -18,7 +18,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "main",
             Some(&options),
         )?;
-        std::fs::write(std::path::Path::new(&out_dir).join("ui.vert.spv"), binary.as_binary_u8())?;
+        std::fs::write(
+            std::path::Path::new(&out_dir).join("ui.vert.spv"),
+            binary.as_binary_u8(),
+        )?;
     }
 
     {
@@ -30,7 +33,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "main",
             Some(&options),
         )?;
-        std::fs::write(std::path::Path::new(&out_dir).join("ui.frag.spv"), binary.as_binary_u8())?;
+        std::fs::write(
+            std::path::Path::new(&out_dir).join("ui.frag.spv"),
+            binary.as_binary_u8(),
+        )?;
     }
 
     Ok(())
