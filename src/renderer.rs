@@ -198,41 +198,20 @@ impl Renderer {
 
     pub fn begin_frame(&mut self, handle: vk::SwapchainKHR) -> Result<(), Error> {
         let device = self.device.as_ref().unwrap();
-        let vkdevice = &device.device;
         let (swapchain, _) = self.swapchains.get_mut(&handle).unwrap();
-
-        let frame_idx = swapchain.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
-        let fif = &swapchain.frames_in_flight;
-
-        unsafe {
-            vkdevice.wait_for_fences(&[fif.fences[frame_idx]], true, u64::MAX)?;
-            vkdevice.reset_fences(&[fif.fences[frame_idx]])?;
-        }
-
-        let (index, _needs_resize) = unsafe {
-            device.swapchain_api.acquire_next_image(
-                handle,
-                u64::MAX,
-                fif.acquire_semaphores[frame_idx],
-                vk::Fence::null(),
-            )?
-        };
-
-        swapchain.current_image = index;
-        Ok(())
+        acquire_next_image(device, handle, swapchain)
     }
 
     pub fn end_frame(&mut self, handle: vk::SwapchainKHR) -> Result<(), Error> {
         let device = self.device.as_ref().unwrap();
         let (swapchain, render_state) = self.swapchains.get_mut(&handle).unwrap();
-        let pipeline = self.pipelines.get(&swapchain.format).unwrap();
 
         let frame_idx = swapchain.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
         let fif = &swapchain.frames_in_flight;
 
         let command_buffer = pipeline::record_draw(
             &device.device,
-            pipeline,
+            self.pipelines.get(&swapchain.format).unwrap(),
             render_state.command_buffers[frame_idx],
             render_state.frame_buffers[frame_idx],
             swapchain.extent,
@@ -250,17 +229,10 @@ impl Renderer {
                     .build()],
                 fif.fences[frame_idx],
             )?;
-
-            device.swapchain_api.queue_present(
-                device.present_queue,
-                &vk::PresentInfoKHR::builder()
-                    .wait_semaphores(&[fif.present_semaphores[frame_idx]])
-                    .swapchains(&[handle])
-                    .image_indices(&[swapchain.current_image]),
-            )?;
         }
 
-        swapchain.current_frame += 1;
+        present(device, handle, swapchain)?;
+
         Ok(())
     }
 }
@@ -580,6 +552,54 @@ fn destroy_swapchain(
         device.swapchain_api.destroy_swapchain(handle, None);
         surface_api.destroy_surface(data.surface, None);
     }
+
+    Ok(())
+}
+
+fn acquire_next_image(
+    device: &Device,
+    handle: vk::SwapchainKHR,
+    swapchain: &mut Swapchain,
+) -> Result<(), Error> {
+    let frame_idx = swapchain.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
+
+    unsafe {
+        let fence = swapchain.frames_in_flight.fences[frame_idx];
+        device.device.wait_for_fences(&[fence], true, u64::MAX)?;
+        device.device.reset_fences(&[fence])?;
+    }
+
+    let (index, _needs_resize) = unsafe {
+        device.swapchain_api.acquire_next_image(
+            handle,
+            u64::MAX,
+            swapchain.frames_in_flight.acquire_semaphores[frame_idx],
+            vk::Fence::null(),
+        )?
+    };
+
+    swapchain.current_image = index;
+    Ok(())
+}
+
+fn present(
+    device: &Device,
+    handle: vk::SwapchainKHR,
+    swapchain: &mut Swapchain,
+) -> Result<(), Error> {
+    let frame_idx = swapchain.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
+
+    unsafe {
+        device.swapchain_api.queue_present(
+            device.present_queue,
+            &vk::PresentInfoKHR::builder()
+                .wait_semaphores(&[swapchain.frames_in_flight.present_semaphores[frame_idx]])
+                .swapchains(&[handle])
+                .image_indices(&[swapchain.current_image]),
+        )?;
+    }
+
+    swapchain.current_frame += 1;
 
     Ok(())
 }
