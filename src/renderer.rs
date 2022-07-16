@@ -176,10 +176,47 @@ impl Renderer {
         Ok(())
     }
 
-    pub fn begin_frame(&mut self, handle: vk::SwapchainKHR) -> Result<(), Error> {
+    pub fn begin_frame(&mut self, handle: vk::SwapchainKHR) -> Result<vk::SwapchainKHR, Error> {
         let device = self.device.as_ref().unwrap();
         let (swapchain, _) = self.swapchains.get_mut(&handle).unwrap();
-        swapchain::acquire_next_image(device, handle, swapchain)
+        let frame_idx = swapchain.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
+
+        let fence = swapchain.frames_in_flight.fences[frame_idx];
+        unsafe { device.device.wait_for_fences(&[fence], true, u64::MAX)? };
+
+        let result = match swapchain::acquire_next_image(device, handle, swapchain) {
+            Ok(_) => Ok(handle),
+            Err(Error::SwapchainOutOfDate) => {
+                let (swapchain, render_state) = self.swapchains.remove(&handle).unwrap();
+
+                let (handle, mut swapchain) = swapchain::resize(
+                    device,
+                    handle,
+                    swapchain,
+                    vk::Extent2D::default(),
+                    &self.surface_api,
+                )?;
+
+                destroy_render_state(device, render_state);
+                let render_state = init_render_state(
+                    device,
+                    &mut self.pipelines,
+                    swapchain.format,
+                    &swapchain.image_views,
+                    swapchain.extent,
+                )?;
+
+                swapchain::acquire_next_image(device, handle, &mut swapchain)?;
+
+                self.swapchains.insert(handle, (swapchain, render_state));
+                Ok(handle)
+            }
+            Err(e) => Err(e),
+        };
+
+        unsafe { device.device.reset_fences(&[fence])? };
+
+        result
     }
 
     pub fn end_frame(&mut self, handle: vk::SwapchainKHR) -> Result<(), Error> {

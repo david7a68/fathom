@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut renderer = Renderer::new()?;
-    let swapchain = renderer.create_swapchain(hwnd, hinstance)?;
+    let mut swapchain = renderer.create_swapchain(hwnd, hinstance)?;
 
     unsafe { ShowWindow(hwnd, SW_SHOW) };
 
@@ -100,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        renderer.begin_frame(swapchain).unwrap();
+        swapchain = renderer.begin_frame(swapchain).unwrap();
         renderer.end_frame(swapchain).unwrap();
     }
 

@@ -6,7 +6,8 @@ pub enum Error {
     NoVulkanLibrary,
     #[error("no suitable GPU was found")]
     NoSuitableGpu,
-
+    #[error("the swapchain cannot be used because it is out of date")]
+    SwapchainOutOfDate,
     #[error("{0}")]
     Vulkan(#[from] vk::Result),
 }
