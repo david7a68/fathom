@@ -4,7 +4,7 @@ mod swapchain;
 
 use std::{
     collections::{HashMap, HashSet},
-    ffi::CStr,
+    ffi::{CStr},
     os::raw::c_char,
 };
 
@@ -179,47 +179,41 @@ impl Renderer {
     pub fn begin_frame(&mut self, handle: vk::SwapchainKHR) -> Result<vk::SwapchainKHR, Error> {
         let device = self.device.as_ref().unwrap();
         let (swapchain, _) = self.swapchains.get_mut(&handle).unwrap();
-        let frame_idx = swapchain.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
 
-        let fence = swapchain.frames_in_flight.fences[frame_idx];
-        unsafe { device.device.wait_for_fences(&[fence], true, u64::MAX)? };
-
-        let result = match swapchain::acquire_next_image(device, handle, swapchain) {
+        match swapchain::acquire_next_image(device, handle, swapchain) {
             Ok(_) => Ok(handle),
             Err(Error::SwapchainOutOfDate) => {
-                let (swapchain, render_state) = self.swapchains.remove(&handle).unwrap();
+                let (old_swapchain, old_render_state) = self.swapchains.remove(&handle).unwrap();
 
-                let (handle, mut swapchain) = swapchain::resize(
+                let (new_handle, mut new_swapchain) = swapchain::resize(
                     device,
                     handle,
-                    swapchain,
+                    old_swapchain,
                     vk::Extent2D::default(),
                     &self.surface_api,
                 )?;
 
-                destroy_render_state(device, render_state);
-                let render_state = init_render_state(
+                destroy_render_state(device, old_render_state);
+
+                let new_render_state = init_render_state(
                     device,
                     &mut self.pipelines,
-                    swapchain.format,
-                    &swapchain.image_views,
-                    swapchain.extent,
+                    new_swapchain.format,
+                    &new_swapchain.image_views,
+                    new_swapchain.extent,
                 )?;
 
-                swapchain::acquire_next_image(device, handle, &mut swapchain)?;
+                swapchain::acquire_next_image(device, new_handle, &mut new_swapchain)?;
+                self.swapchains
+                    .insert(new_handle, (new_swapchain, new_render_state));
 
-                self.swapchains.insert(handle, (swapchain, render_state));
-                Ok(handle)
+                Ok(new_handle)
             }
             Err(e) => Err(e),
-        };
-
-        unsafe { device.device.reset_fences(&[fence])? };
-
-        result
+        }
     }
 
-    pub fn end_frame(&mut self, handle: vk::SwapchainKHR) -> Result<(), Error> {
+    pub fn end_frame(&mut self, handle: vk::SwapchainKHR) -> Result<vk::SwapchainKHR, Error> {
         let device = self.device.as_ref().unwrap();
         let (swapchain, render_state) = self.swapchains.get_mut(&handle).unwrap();
 
@@ -230,7 +224,7 @@ impl Renderer {
             &device.device,
             self.pipelines.get(&swapchain.format).unwrap(),
             render_state.command_buffers[frame_idx],
-            render_state.frame_buffers[frame_idx],
+            render_state.frame_buffers[swapchain.current_image.unwrap() as usize],
             swapchain.extent,
         )?;
 
@@ -248,9 +242,34 @@ impl Renderer {
             )?;
         }
 
-        swapchain::present(device, handle, swapchain)?;
+        match swapchain::present(device, handle, swapchain) {
+            Ok(_) => Ok(handle),
+            Err(Error::SwapchainOutOfDate) => {
+                let (old_swapchain, old_render_state) = self.swapchains.remove(&handle).unwrap();
 
-        Ok(())
+                let (new_handle, new_swapchain) = swapchain::resize(
+                    device,
+                    handle,
+                    old_swapchain,
+                    vk::Extent2D::default(),
+                    &self.surface_api,
+                )?;
+
+                destroy_render_state(device, old_render_state);
+
+                let new_render_state = init_render_state(
+                    device,
+                    &mut self.pipelines,
+                    new_swapchain.format,
+                    &new_swapchain.image_views,
+                    new_swapchain.extent,
+                )?;
+
+                self.swapchains.insert(new_handle, (new_swapchain, new_render_state));
+                Ok(new_handle)
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 

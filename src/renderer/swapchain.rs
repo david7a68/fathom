@@ -13,7 +13,7 @@ pub struct Swapchain {
     pub image_views: Vec<vk::ImageView>,
 
     pub current_frame: u32,
-    pub current_image: u32,
+    pub current_image: Option<u32>,
 
     pub frames_in_flight: FramesInFlight,
 }
@@ -73,7 +73,7 @@ pub(super) fn create(
             surface,
             image_views,
             current_frame: 0,
-            current_image: 0,
+            current_image: None,
             frames_in_flight,
         },
     ))
@@ -89,8 +89,8 @@ pub(super) fn resize(
     unsafe {
         device
             .device
-            .wait_for_fences(&old_swapchain.frames_in_flight.fences, true, u64::MAX)?
-    };
+            .wait_for_fences(&old_swapchain.frames_in_flight.fences, true, u64::MAX)?;
+    }
 
     let (handle, format, extent, image_views) = create_raw_swapchain(
         device,
@@ -116,7 +116,7 @@ pub(super) fn resize(
             surface: old_swapchain.surface,
             image_views,
             current_frame: old_swapchain.current_frame,
-            current_image: old_swapchain.current_image,
+            current_image: None,
             frames_in_flight: old_swapchain.frames_in_flight,
         },
     ))
@@ -156,7 +156,15 @@ pub(super) fn acquire_next_image(
     handle: vk::SwapchainKHR,
     swapchain: &mut Swapchain,
 ) -> Result<(), Error> {
-    let frame_idx = swapchain.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
+    let frame_idx = (swapchain.current_frame % DESIRED_SWAPCHAIN_LENGTH) as usize;
+
+    unsafe {
+        device.device.wait_for_fences(
+            &[swapchain.frames_in_flight.fences[frame_idx]],
+            true,
+            u64::MAX,
+        )?;
+    }
 
     let (index, needs_resize) = unsafe {
         device.swapchain_api.acquire_next_image(
@@ -170,7 +178,12 @@ pub(super) fn acquire_next_image(
     if needs_resize {
         Err(Error::SwapchainOutOfDate)
     } else {
-        swapchain.current_image = index;
+        swapchain.current_image = Some(index);
+        unsafe {
+            device
+                .device
+                .reset_fences(&[swapchain.frames_in_flight.fences[frame_idx]])?
+        };
         Ok(())
     }
 }
@@ -180,21 +193,25 @@ pub(super) fn present(
     handle: vk::SwapchainKHR,
     swapchain: &mut Swapchain,
 ) -> Result<(), Error> {
-    let frame_idx = swapchain.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
+    let frame_idx = (swapchain.current_frame % DESIRED_SWAPCHAIN_LENGTH) as usize;
 
-    unsafe {
+    let out_of_date = unsafe {
         device.swapchain_api.queue_present(
             device.present_queue,
             &vk::PresentInfoKHR::builder()
                 .wait_semaphores(&[swapchain.frames_in_flight.present_semaphores[frame_idx]])
                 .swapchains(&[handle])
-                .image_indices(&[swapchain.current_image]),
-        )?;
-    }
+                .image_indices(&[swapchain.current_image.take().unwrap()]),
+        )
+    }?;
 
     swapchain.current_frame += 1;
 
-    Ok(())
+    if out_of_date {
+        Err(Error::SwapchainOutOfDate)
+    } else {
+        Ok(())
+    }
 }
 
 fn create_raw_swapchain(

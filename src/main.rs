@@ -1,5 +1,8 @@
 mod renderer;
 
+use std::{rc::Rc, cell::RefCell};
+
+use ash::vk;
 use windows::{
     core::PCWSTR,
     Win32::{
@@ -9,7 +12,7 @@ use windows::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, LoadCursorW,
             PeekMessageW, PostQuitMessage, RegisterClassExW, ShowWindow, TranslateMessage,
             CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MSG, PM_REMOVE, SW_SHOW,
-            WINDOW_EX_STYLE, WM_DESTROY, WM_QUIT, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+            WINDOW_EX_STYLE, WM_DESTROY, WM_QUIT, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WM_SIZE, SetWindowLongPtrW, GWLP_USERDATA, WM_PAINT, GetWindowLongPtrW,
         },
     },
 };
@@ -70,10 +73,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mut renderer = Renderer::new()?;
-    let mut swapchain = renderer.create_swapchain(hwnd, hinstance)?;
+    let renderer = Rc::new(RefCell::new(Renderer::new()?));
+    let swapchain = renderer.borrow_mut().create_swapchain(hwnd, hinstance)?;
 
-    unsafe { ShowWindow(hwnd, SW_SHOW) };
+    let window = Box::new(Window {
+        hwnd,
+        renderer: renderer.clone(),
+        swapchain,
+    });
+
+    unsafe {
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::leak(window) as *const _ as _);
+        ShowWindow(hwnd, SW_SHOW);
+    }
 
     'event_pump: loop {
         let mut msg = MSG::default();
@@ -100,19 +112,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        swapchain = renderer.begin_frame(swapchain).unwrap();
-        renderer.end_frame(swapchain).unwrap();
+        // let mut renderer = renderer.borrow_mut();
+        // swapchain = renderer.begin_frame(swapchain).unwrap();
+        // renderer.end_frame(swapchain).unwrap();
     }
 
-    renderer.destroy_swapchain(swapchain).unwrap();
+    renderer.borrow_mut().destroy_swapchain(swapchain).unwrap();
 
     Ok(())
 }
 
+struct Window {
+    hwnd: HWND,
+    swapchain: vk::SwapchainKHR,
+    renderer: Rc<RefCell<Renderer>>,
+}
+
+impl Window {
+    pub fn on_destroy(&mut self) {
+        self.renderer.borrow_mut().destroy_swapchain(self.swapchain).unwrap();
+    }
+
+    pub fn on_redraw(&mut self) {
+        let mut renderer = self.renderer.borrow_mut();
+        self.swapchain = renderer.begin_frame(self.swapchain).unwrap();
+        self.swapchain = renderer.end_frame(self.swapchain).unwrap();
+    }
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let window = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Window;
+
+    if window.is_null() {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+
+    if msg == WM_DESTROY {
+        let mut window = Box::from_raw(window);
+        window.on_destroy();
+        PostQuitMessage(0);
+        return LRESULT::default();
+    }
+
+    let window = &mut *window;
+
     match msg {
-        WM_DESTROY => {
-            PostQuitMessage(0);
+        WM_SIZE => {
+            LRESULT::default()
+        }
+        WM_PAINT => {
+            window.on_redraw();
             LRESULT::default()
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
