@@ -12,7 +12,7 @@ use windows::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, LoadCursorW,
             PeekMessageW, PostQuitMessage, RegisterClassExW, ShowWindow, TranslateMessage,
             CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MSG, PM_REMOVE, SW_SHOW,
-            WINDOW_EX_STYLE, WM_DESTROY, WM_QUIT, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WM_SIZE, SetWindowLongPtrW, GWLP_USERDATA, WM_PAINT, GetWindowLongPtrW, WM_ERASEBKGND, WM_WINDOWPOSCHANGED,
+            WINDOW_EX_STYLE, WM_DESTROY, WM_QUIT, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WM_SIZE, SetWindowLongPtrW, GWLP_USERDATA, WM_PAINT, GetWindowLongPtrW, WM_ERASEBKGND, WM_WINDOWPOSCHANGED, GetClientRect,
         },
     },
 };
@@ -134,9 +134,17 @@ impl Window {
     }
 
     pub fn on_redraw(&mut self) {
-        let mut renderer = self.renderer.borrow_mut();
-        self.swapchain = renderer.begin_frame(self.swapchain).unwrap();
-        self.swapchain = renderer.end_frame(self.swapchain).unwrap();
+        let (width, height) = unsafe {
+            let mut rect = std::mem::zeroed();
+            GetClientRect(self.hwnd, &mut rect);
+            (rect.right - rect.left, rect.bottom - rect.top)
+        };
+
+        if width > 0 && height > 0 {
+            let mut renderer = self.renderer.borrow_mut();
+            self.swapchain = renderer.begin_frame(self.swapchain).unwrap();
+            self.swapchain = renderer.end_frame(self.swapchain).unwrap();
+        }
     }
 }
 
