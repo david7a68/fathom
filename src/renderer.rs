@@ -4,7 +4,7 @@ mod swapchain;
 
 use std::{
     collections::{HashMap, HashSet},
-    ffi::{CStr},
+    ffi::CStr,
     os::raw::c_char,
 };
 
@@ -217,13 +217,12 @@ impl Renderer {
         let device = self.device.as_ref().unwrap();
         let (swapchain, render_state) = self.swapchains.get_mut(&handle).unwrap();
 
-        let frame_idx = swapchain.current_frame as usize % DESIRED_SWAPCHAIN_LENGTH as usize;
-        let fif = &swapchain.frames_in_flight;
+        let (frame_index, frame_objects) = swapchain::frame_objects(swapchain);
 
         let command_buffer = pipeline::record_draw(
             &device.device,
             self.pipelines.get(&swapchain.format).unwrap(),
-            render_state.command_buffers[frame_idx],
+            render_state.command_buffers[frame_index],
             render_state.frame_buffers[swapchain.current_image.unwrap() as usize],
             swapchain.extent,
         )?;
@@ -234,11 +233,11 @@ impl Renderer {
                 device.graphics_queue,
                 &[vk::SubmitInfo::builder()
                     .command_buffers(&[command_buffer])
-                    .wait_semaphores(&[fif.acquire_semaphores[frame_idx]])
-                    .signal_semaphores(&[fif.present_semaphores[frame_idx]])
+                    .wait_semaphores(&[frame_objects.acquire_semaphore])
+                    .signal_semaphores(&[frame_objects.present_semaphore])
                     .wait_dst_stage_mask(&wait_stages)
                     .build()],
-                fif.fences[frame_idx],
+                frame_objects.fence,
             )?;
         }
 
@@ -265,7 +264,8 @@ impl Renderer {
                     new_swapchain.extent,
                 )?;
 
-                self.swapchains.insert(new_handle, (new_swapchain, new_render_state));
+                self.swapchains
+                    .insert(new_handle, (new_swapchain, new_render_state));
                 Ok(new_handle)
             }
             Err(e) => Err(e),

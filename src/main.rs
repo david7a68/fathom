@@ -1,6 +1,6 @@
 mod renderer;
 
-use std::{rc::Rc, cell::RefCell};
+use std::{cell::RefCell, rc::Rc};
 
 use ash::vk;
 use windows::{
@@ -9,10 +9,12 @@ use windows::{
         Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, LoadCursorW,
-            PeekMessageW, PostQuitMessage, RegisterClassExW, ShowWindow, TranslateMessage,
-            CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MSG, PM_REMOVE, SW_SHOW,
-            WINDOW_EX_STYLE, WM_DESTROY, WM_QUIT, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WM_SIZE, SetWindowLongPtrW, GWLP_USERDATA, WM_PAINT, GetWindowLongPtrW, WM_ERASEBKGND, WM_WINDOWPOSCHANGED, GetClientRect,
+            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
+            GetWindowLongPtrW, LoadCursorW, PeekMessageW, PostQuitMessage, RegisterClassExW,
+            SetWindowLongPtrW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+            GWLP_USERDATA, IDC_ARROW, MSG, PM_REMOVE, SW_SHOW, WINDOW_EX_STYLE, WM_DESTROY,
+            WM_ERASEBKGND, WM_PAINT, WM_QUIT, WM_WINDOWPOSCHANGED, WNDCLASSEXW,
+            WS_OVERLAPPEDWINDOW,
         },
     },
 };
@@ -130,7 +132,10 @@ struct Window {
 
 impl Window {
     pub fn on_destroy(&mut self) {
-        self.renderer.borrow_mut().destroy_swapchain(self.swapchain).unwrap();
+        self.renderer
+            .borrow_mut()
+            .destroy_swapchain(self.swapchain)
+            .unwrap();
     }
 
     pub fn on_redraw(&mut self) {
@@ -165,12 +170,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     let window = &mut *window;
 
     match msg {
-        WM_WINDOWPOSCHANGED => {
-            LRESULT::default()
-        }
-        WM_ERASEBKGND => {
-            LRESULT(1)
-        }
+        WM_WINDOWPOSCHANGED => LRESULT::default(),
+        WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             window.on_redraw();
             LRESULT::default()
