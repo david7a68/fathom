@@ -1,3 +1,4 @@
+mod indexed_store;
 mod renderer;
 
 use std::{cell::RefCell, rc::Rc};
@@ -19,7 +20,7 @@ use windows::{
     },
 };
 
-use renderer::Renderer;
+use renderer::{Renderer, SwapchainHandle};
 
 const WINDOW_TITLE: &str = "Hello!";
 
@@ -126,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 struct Window {
     hwnd: HWND,
-    swapchain: vk::SwapchainKHR,
+    swapchain: SwapchainHandle,
     renderer: Rc<RefCell<Renderer>>,
 }
 
@@ -147,8 +148,8 @@ impl Window {
 
         if width > 0 && height > 0 {
             let mut renderer = self.renderer.borrow_mut();
-            self.swapchain = renderer.begin_frame(self.swapchain).unwrap();
-            self.swapchain = renderer.end_frame(self.swapchain).unwrap();
+            renderer.begin_frame(self.swapchain).unwrap();
+            renderer.end_frame(self.swapchain).unwrap();
         }
     }
 }

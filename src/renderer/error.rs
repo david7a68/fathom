@@ -10,4 +10,6 @@ pub enum Error {
     SwapchainOutOfDate,
     #[error("{0}")]
     Vulkan(#[from] vk::Result),
+    #[error("too many objects")]
+    TooManyObjects,
 }

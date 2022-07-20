@@ -70,7 +70,7 @@ impl Swapchain {
             frame_sync_objects,
         })
     }
-    
+
     pub(super) fn resize(
         &mut self,
         device: &Device,
@@ -79,82 +79,73 @@ impl Swapchain {
     ) -> Result<(), Error> {
         assert_eq!(self.current_image, None);
         self.wait_idle(device)?;
-    
-        let (handle, format, extent, image_views) = create_raw_swapchain(
-            device,
-            self.surface,
-            new_size,
-            self.handle,
-            surface_api,
-        )?;
-    
+
+        let (handle, format, extent, image_views) =
+            create_raw_swapchain(device, self.surface, new_size, self.handle, surface_api)?;
+
         unsafe {
-            device
-                .swapchain_api
-                .destroy_swapchain(self.handle, None);
-    
+            device.swapchain_api.destroy_swapchain(self.handle, None);
+
             for image_view in self.image_views.drain(..) {
                 device.device.destroy_image_view(image_view, None);
             }
         }
-    
+
         self.handle = handle;
         self.format = format;
         self.extent = extent;
         self.image_views = image_views;
-    
+
         Ok(())
     }
-    
+
     pub(super) fn destroy(
         &mut self,
         device: &Device,
         surface_api: &ash::extensions::khr::Surface,
     ) -> Result<(), Error> {
         self.wait_idle(device)?;
-    
+
         let vkdevice = &device.device;
         unsafe {
             for view in self.image_views.drain(..) {
                 vkdevice.destroy_image_view(view, None);
             }
-    
+
             for sync in &self.frame_sync_objects {
                 vkdevice.destroy_semaphore(sync.acquire_semaphore, None);
                 vkdevice.destroy_semaphore(sync.present_semaphore, None);
                 vkdevice.destroy_fence(sync.fence, None);
             }
-    
-            device
-                .swapchain_api
-                .destroy_swapchain(self.handle, None);
+
+            device.swapchain_api.destroy_swapchain(self.handle, None);
             surface_api.destroy_surface(self.surface, None);
         }
-    
+
         Ok(())
     }
-    
+
     pub(super) fn frame_objects(&self) -> (usize, &FrameSyncObjects) {
         let index = (self.current_frame % DESIRED_SWAPCHAIN_LENGTH) as usize;
         (index, &self.frame_sync_objects[index])
     }
-    
+
     pub(super) fn wait_idle(&self, device: &Device) -> Result<(), Error> {
         let fences = [
             self.frame_sync_objects[0].fence,
             self.frame_sync_objects[1].fence,
         ];
-    
+
         unsafe { device.device.wait_for_fences(&fences, true, u64::MAX) }?;
         Ok(())
     }
-    
+
     pub(super) fn acquire_next_image(&mut self, device: &Device) -> Result<(), Error> {
         let (_, sync_objects) = self.frame_objects();
-    
+
         let vkdevice = &device.device;
         unsafe { vkdevice.wait_for_fences(&[sync_objects.fence], true, u64::MAX) }?;
-    
+
         let (index, needs_resize) = unsafe {
             device.swapchain_api.acquire_next_image(
                 self.handle,
@@ -163,7 +154,7 @@ impl Swapchain {
                 vk::Fence::null(),
             )?
         };
-    
+
         if needs_resize {
             Err(Error::SwapchainOutOfDate)
         } else {
@@ -172,10 +163,10 @@ impl Swapchain {
             Ok(())
         }
     }
-    
+
     pub(super) fn present(&mut self, device: &Device) -> Result<(), Error> {
         let (_, frame_objects) = self.frame_objects();
-    
+
         let out_of_date = unsafe {
             device.swapchain_api.queue_present(
                 device.present_queue,
@@ -185,9 +176,9 @@ impl Swapchain {
                     .image_indices(&[self.current_image.take().unwrap()]),
             )
         }?;
-    
+
         self.current_frame += 1;
-    
+
         if out_of_date {
             Err(Error::SwapchainOutOfDate)
         } else {

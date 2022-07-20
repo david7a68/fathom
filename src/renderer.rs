@@ -14,6 +14,8 @@ use windows::Win32::{
     UI::WindowsAndMessaging::GetClientRect,
 };
 
+use crate::indexed_store::{Index, IndexedStore};
+
 use self::{
     error::Error,
     swapchain::{Swapchain, FRAMES_IN_FLIGHT},
@@ -47,6 +49,9 @@ struct RenderState {
     frame_buffers: Vec<vk::Framebuffer>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct SwapchainHandle(Index);
+
 pub struct Renderer {
     #[allow(dead_code)]
     entry: ash::Entry,
@@ -58,7 +63,7 @@ pub struct Renderer {
     os_surface_api: ash::extensions::khr::Win32Surface,
 
     device: Option<Device>,
-    swapchains: HashMap<vk::SwapchainKHR, (Swapchain, RenderState)>,
+    swapchains: IndexedStore<(Swapchain, RenderState)>,
     pipelines: HashMap<vk::Format, pipeline::Pipeline>,
 }
 
@@ -122,7 +127,7 @@ impl Renderer {
             surface_api,
             os_surface_api,
             device: None,
-            swapchains: HashMap::new(),
+            swapchains: IndexedStore::new(),
             pipelines: HashMap::new(),
         })
     }
@@ -132,7 +137,7 @@ impl Renderer {
         &mut self,
         hwnd: HWND,
         hinstance: HINSTANCE,
-    ) -> Result<vk::SwapchainKHR, Error> {
+    ) -> Result<SwapchainHandle, Error> {
         let surface_ci = vk::Win32SurfaceCreateInfoKHR::builder()
             .hinstance(hinstance.0 as _)
             .hwnd(hwnd.0 as _);
@@ -163,13 +168,15 @@ impl Renderer {
             extent,
         )?;
 
-        let handle = swapchain.handle;
-        self.swapchains.insert(handle, (swapchain, render_state));
-        Ok(handle)
+        let handle = self
+            .swapchains
+            .insert((swapchain, render_state))
+            .map_err(|_| Error::TooManyObjects)?;
+        Ok(SwapchainHandle(handle))
     }
 
-    pub fn destroy_swapchain(&mut self, handle: vk::SwapchainKHR) -> Result<(), Error> {
-        if let Some((mut swapchain, state)) = self.swapchains.remove(&handle) {
+    pub fn destroy_swapchain(&mut self, handle: SwapchainHandle) -> Result<(), Error> {
+        if let Some((mut swapchain, state)) = self.swapchains.remove(handle.0) {
             let device = self.device.as_ref().unwrap();
             swapchain.destroy(device, &self.surface_api).unwrap();
             destroy_render_state(device, state);
@@ -177,20 +184,18 @@ impl Renderer {
         Ok(())
     }
 
-    pub fn begin_frame(&mut self, handle: vk::SwapchainKHR) -> Result<vk::SwapchainKHR, Error> {
+    pub fn begin_frame(&mut self, handle: SwapchainHandle) -> Result<(), Error> {
         let device = self.device.as_ref().unwrap();
-        let (swapchain, _) = self.swapchains.get_mut(&handle).unwrap();
+        let (swapchain, _) = self.swapchains.get_mut(handle.0).unwrap();
 
         match swapchain.acquire_next_image(device) {
-            Ok(_) => Ok(handle),
+            Ok(_) => Ok(()),
             Err(Error::SwapchainOutOfDate) => {
-                let (mut swapchain, old_render_state) = self.swapchains.remove(&handle).unwrap();
+                let (swapchain, old_render_state) = self.swapchains.get_mut(handle.0).unwrap();
 
                 swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
 
-                destroy_render_state(device, old_render_state);
-
-                let new_render_state = init_render_state(
+                let mut new_render_state = init_render_state(
                     device,
                     &mut self.pipelines,
                     swapchain.format,
@@ -198,19 +203,19 @@ impl Renderer {
                     swapchain.extent,
                 )?;
 
+                std::mem::swap(&mut new_render_state, old_render_state);
+                destroy_render_state(device, new_render_state);
+
                 swapchain.acquire_next_image(device)?;
-                let handle = swapchain.handle;
-                self.swapchains
-                    .insert(handle, (swapchain, new_render_state));
-                Ok(handle)
+                Ok(())
             }
             Err(e) => Err(e),
         }
     }
 
-    pub fn end_frame(&mut self, handle: vk::SwapchainKHR) -> Result<vk::SwapchainKHR, Error> {
+    pub fn end_frame(&mut self, handle: SwapchainHandle) -> Result<(), Error> {
         let device = self.device.as_ref().unwrap();
-        let (swapchain, render_state) = self.swapchains.get_mut(&handle).unwrap();
+        let (swapchain, render_state) = self.swapchains.get_mut(handle.0).unwrap();
 
         let (frame_index, frame_objects) = swapchain.frame_objects();
 
@@ -237,15 +242,13 @@ impl Renderer {
         }
 
         match swapchain.present(device) {
-            Ok(_) => Ok(handle),
+            Ok(_) => Ok(()),
             Err(Error::SwapchainOutOfDate) => {
-                let (mut swapchain, old_render_state) = self.swapchains.remove(&handle).unwrap();
+                let (swapchain, old_render_state) = self.swapchains.get_mut(handle.0).unwrap();
 
                 swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
 
-                destroy_render_state(device, old_render_state);
-
-                let new_render_state = init_render_state(
+                let mut new_render_state = init_render_state(
                     device,
                     &mut self.pipelines,
                     swapchain.format,
@@ -253,11 +256,11 @@ impl Renderer {
                     swapchain.extent,
                 )?;
 
+                std::mem::swap(&mut new_render_state, old_render_state);
+                destroy_render_state(device, new_render_state);
+
                 swapchain.acquire_next_image(device)?;
-                let handle = swapchain.handle;
-                self.swapchains
-                    .insert(handle, (swapchain, new_render_state));
-                Ok(handle)
+                Ok(())
             }
             Err(e) => Err(e),
         }
@@ -273,10 +276,10 @@ impl Drop for Renderer {
                 vkdevice.device_wait_idle().unwrap();
             }
 
-            for (_, (mut swapchain, render_state)) in std::mem::take(&mut self.swapchains) {
-                swapchain.destroy(&device, &self.surface_api).unwrap();
-                destroy_render_state(&device, render_state);
-            }
+            assert!(
+                self.swapchains.is_empty(),
+                "all swapchains must be destroyed before the renderer is dropped"
+            );
 
             for (_, pipeline) in std::mem::take(&mut self.pipelines) {
                 unsafe {
