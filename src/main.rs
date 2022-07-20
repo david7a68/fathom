@@ -12,7 +12,7 @@ use windows::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, LoadCursorW,
             PeekMessageW, PostQuitMessage, RegisterClassExW, ShowWindow, TranslateMessage,
             CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MSG, PM_REMOVE, SW_SHOW,
-            WINDOW_EX_STYLE, WM_DESTROY, WM_QUIT, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WM_SIZE, SetWindowLongPtrW, GWLP_USERDATA, WM_PAINT, GetWindowLongPtrW,
+            WINDOW_EX_STYLE, WM_DESTROY, WM_QUIT, WNDCLASSEXW, WS_OVERLAPPEDWINDOW, WM_SIZE, SetWindowLongPtrW, GWLP_USERDATA, WM_PAINT, GetWindowLongPtrW, WM_ERASEBKGND, WM_WINDOWPOSCHANGED,
         },
     },
 };
@@ -157,8 +157,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     let window = &mut *window;
 
     match msg {
-        WM_SIZE => {
+        WM_WINDOWPOSCHANGED => {
             LRESULT::default()
+        }
+        WM_ERASEBKGND => {
+            LRESULT(1)
         }
         WM_PAINT => {
             window.on_redraw();
