@@ -16,7 +16,7 @@ use windows::Win32::{
 
 use self::{
     error::Error,
-    swapchain::{Swapchain, DESIRED_SWAPCHAIN_LENGTH, FRAMES_IN_FLIGHT},
+    swapchain::{Swapchain, FRAMES_IN_FLIGHT},
 };
 
 const VALIDATION_LAYER: *const i8 = b"VK_LAYER_KHRONOS_validation\0".as_ptr().cast();
@@ -154,7 +154,7 @@ impl Renderer {
         let device =
             self.device
                 .get_or_insert(init_device(&self.instance, &self.surface_api, surface)?);
-        let (handle, swapchain) = swapchain::create(device, surface, extent, &self.surface_api)?;
+        let swapchain = Swapchain::new(device, surface, extent, &self.surface_api)?;
         let render_state = init_render_state(
             device,
             &mut self.pipelines,
@@ -163,14 +163,15 @@ impl Renderer {
             extent,
         )?;
 
+        let handle = swapchain.handle;
         self.swapchains.insert(handle, (swapchain, render_state));
         Ok(handle)
     }
 
     pub fn destroy_swapchain(&mut self, handle: vk::SwapchainKHR) -> Result<(), Error> {
-        if let Some((swapchain, state)) = self.swapchains.remove(&handle) {
+        if let Some((mut swapchain, state)) = self.swapchains.remove(&handle) {
             let device = self.device.as_ref().unwrap();
-            swapchain::destroy(device, &self.surface_api, handle, swapchain)?;
+            swapchain.destroy(device, &self.surface_api).unwrap();
             destroy_render_state(device, state);
         }
         Ok(())
@@ -180,34 +181,28 @@ impl Renderer {
         let device = self.device.as_ref().unwrap();
         let (swapchain, _) = self.swapchains.get_mut(&handle).unwrap();
 
-        match swapchain::acquire_next_image(device, handle, swapchain) {
+        match swapchain.acquire_next_image(device) {
             Ok(_) => Ok(handle),
             Err(Error::SwapchainOutOfDate) => {
-                let (old_swapchain, old_render_state) = self.swapchains.remove(&handle).unwrap();
+                let (mut swapchain, old_render_state) = self.swapchains.remove(&handle).unwrap();
 
-                let (new_handle, mut new_swapchain) = swapchain::resize(
-                    device,
-                    handle,
-                    old_swapchain,
-                    vk::Extent2D::default(),
-                    &self.surface_api,
-                )?;
+                swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
 
                 destroy_render_state(device, old_render_state);
 
                 let new_render_state = init_render_state(
                     device,
                     &mut self.pipelines,
-                    new_swapchain.format,
-                    &new_swapchain.image_views,
-                    new_swapchain.extent,
+                    swapchain.format,
+                    &swapchain.image_views,
+                    swapchain.extent,
                 )?;
 
-                swapchain::acquire_next_image(device, new_handle, &mut new_swapchain)?;
+                swapchain.acquire_next_image(device)?;
+                let handle = swapchain.handle;
                 self.swapchains
-                    .insert(new_handle, (new_swapchain, new_render_state));
-
-                Ok(new_handle)
+                    .insert(handle, (swapchain, new_render_state));
+                Ok(handle)
             }
             Err(e) => Err(e),
         }
@@ -217,7 +212,7 @@ impl Renderer {
         let device = self.device.as_ref().unwrap();
         let (swapchain, render_state) = self.swapchains.get_mut(&handle).unwrap();
 
-        let (frame_index, frame_objects) = swapchain::frame_objects(swapchain);
+        let (frame_index, frame_objects) = swapchain.frame_objects();
 
         let command_buffer = pipeline::record_draw(
             &device.device,
@@ -241,32 +236,28 @@ impl Renderer {
             )?;
         }
 
-        match swapchain::present(device, handle, swapchain) {
+        match swapchain.present(device) {
             Ok(_) => Ok(handle),
             Err(Error::SwapchainOutOfDate) => {
-                let (old_swapchain, old_render_state) = self.swapchains.remove(&handle).unwrap();
+                let (mut swapchain, old_render_state) = self.swapchains.remove(&handle).unwrap();
 
-                let (new_handle, new_swapchain) = swapchain::resize(
-                    device,
-                    handle,
-                    old_swapchain,
-                    vk::Extent2D::default(),
-                    &self.surface_api,
-                )?;
+                swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
 
                 destroy_render_state(device, old_render_state);
 
                 let new_render_state = init_render_state(
                     device,
                     &mut self.pipelines,
-                    new_swapchain.format,
-                    &new_swapchain.image_views,
-                    new_swapchain.extent,
+                    swapchain.format,
+                    &swapchain.image_views,
+                    swapchain.extent,
                 )?;
 
+                swapchain.acquire_next_image(device)?;
+                let handle = swapchain.handle;
                 self.swapchains
-                    .insert(new_handle, (new_swapchain, new_render_state));
-                Ok(new_handle)
+                    .insert(handle, (swapchain, new_render_state));
+                Ok(handle)
             }
             Err(e) => Err(e),
         }
@@ -282,8 +273,8 @@ impl Drop for Renderer {
                 vkdevice.device_wait_idle().unwrap();
             }
 
-            for (handle, (swapchain, render_state)) in std::mem::take(&mut self.swapchains) {
-                swapchain::destroy(&device, &self.surface_api, handle, swapchain).unwrap();
+            for (_, (mut swapchain, render_state)) in std::mem::take(&mut self.swapchains) {
+                swapchain.destroy(&device, &self.surface_api).unwrap();
                 destroy_render_state(&device, render_state);
             }
 

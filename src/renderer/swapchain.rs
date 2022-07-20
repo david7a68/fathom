@@ -6,7 +6,15 @@ pub const FRAMES_IN_FLIGHT: u32 = 2;
 pub const DESIRED_SWAPCHAIN_LENGTH: u32 = 2;
 
 #[derive(Debug)]
+pub struct FrameSyncObjects {
+    pub acquire_semaphore: vk::Semaphore,
+    pub present_semaphore: vk::Semaphore,
+    pub fence: vk::Fence,
+}
+
+#[derive(Debug)]
 pub struct Swapchain {
+    pub handle: vk::SwapchainKHR,
     pub format: vk::Format,
     pub extent: vk::Extent2D,
     pub surface: vk::SurfaceKHR,
@@ -18,48 +26,41 @@ pub struct Swapchain {
     pub frame_sync_objects: [FrameSyncObjects; FRAMES_IN_FLIGHT as usize],
 }
 
-#[derive(Debug)]
-pub struct FrameSyncObjects {
-    pub acquire_semaphore: vk::Semaphore,
-    pub present_semaphore: vk::Semaphore,
-    pub fence: vk::Fence,
-}
+impl Swapchain {
+    pub(super) fn new(
+        device: &Device,
+        surface: vk::SurfaceKHR,
+        extent: vk::Extent2D,
+        surface_api: &ash::extensions::khr::Surface,
+    ) -> Result<Self, Error> {
+        let frame_sync_objects = unsafe {
+            let semaphore_ci = vk::SemaphoreCreateInfo::builder();
+            let fence_ci = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
 
-pub(super) fn create(
-    device: &Device,
-    surface: vk::SurfaceKHR,
-    extent: vk::Extent2D,
-    surface_api: &ash::extensions::khr::Surface,
-) -> Result<(vk::SwapchainKHR, Swapchain), Error> {
-    let frame_sync_objects = unsafe {
-        let semaphore_ci = vk::SemaphoreCreateInfo::builder();
-        let fence_ci = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
+            [
+                FrameSyncObjects {
+                    acquire_semaphore: device.device.create_semaphore(&semaphore_ci, None)?,
+                    present_semaphore: device.device.create_semaphore(&semaphore_ci, None)?,
+                    fence: device.device.create_fence(&fence_ci, None)?,
+                },
+                FrameSyncObjects {
+                    acquire_semaphore: device.device.create_semaphore(&semaphore_ci, None)?,
+                    present_semaphore: device.device.create_semaphore(&semaphore_ci, None)?,
+                    fence: device.device.create_fence(&fence_ci, None)?,
+                },
+            ]
+        };
 
-        [
-            FrameSyncObjects {
-                acquire_semaphore: device.device.create_semaphore(&semaphore_ci, None)?,
-                present_semaphore: device.device.create_semaphore(&semaphore_ci, None)?,
-                fence: device.device.create_fence(&fence_ci, None)?,
-            },
-            FrameSyncObjects {
-                acquire_semaphore: device.device.create_semaphore(&semaphore_ci, None)?,
-                present_semaphore: device.device.create_semaphore(&semaphore_ci, None)?,
-                fence: device.device.create_fence(&fence_ci, None)?,
-            },
-        ]
-    };
+        let (handle, format, extent, image_views) = create_raw_swapchain(
+            device,
+            surface,
+            extent,
+            vk::SwapchainKHR::null(),
+            surface_api,
+        )?;
 
-    let (handle, format, extent, image_views) = create_raw_swapchain(
-        device,
-        surface,
-        extent,
-        vk::SwapchainKHR::null(),
-        surface_api,
-    )?;
-
-    Ok((
-        handle,
-        Swapchain {
+        Ok(Swapchain {
+            handle,
             format,
             extent,
             surface,
@@ -67,142 +68,131 @@ pub(super) fn create(
             current_frame: 0,
             current_image: None,
             frame_sync_objects,
-        },
-    ))
-}
-
-pub(super) fn resize(
-    device: &Device,
-    old_handle: vk::SwapchainKHR,
-    old_swapchain: Swapchain,
-    new_size: vk::Extent2D,
-    surface_api: &ash::extensions::khr::Surface,
-) -> Result<(vk::SwapchainKHR, Swapchain), Error> {
-    wait_idle(device, &old_swapchain)?;
-
-    let (handle, format, extent, image_views) = create_raw_swapchain(
-        device,
-        old_swapchain.surface,
-        new_size,
-        old_handle,
-        surface_api,
-    )?;
-
-    unsafe {
-        device.swapchain_api.destroy_swapchain(old_handle, None);
-
-        for image_view in old_swapchain.image_views.iter() {
-            device.device.destroy_image_view(*image_view, None);
-        }
+        })
     }
-
-    Ok((
-        handle,
-        Swapchain {
-            format,
-            extent,
-            surface: old_swapchain.surface,
-            image_views,
-            current_frame: old_swapchain.current_frame,
-            current_image: None,
-            frame_sync_objects: old_swapchain.frame_sync_objects,
-        },
-    ))
-}
-
-pub(super) fn destroy(
-    device: &Device,
-    surface_api: &ash::extensions::khr::Surface,
-    handle: vk::SwapchainKHR,
-    mut data: Swapchain,
-) -> Result<(), Error> {
-    wait_idle(device, &data)?;
     
-    let vkdevice = &device.device;
-    unsafe {
-        for view in data.image_views.drain(..) {
-            vkdevice.destroy_image_view(view, None);
-        }
-
-        for sync in data.frame_sync_objects {
-            vkdevice.destroy_semaphore(sync.acquire_semaphore, None);
-            vkdevice.destroy_semaphore(sync.present_semaphore, None);
-            vkdevice.destroy_fence(sync.fence, None);
-        }
-
-        device.swapchain_api.destroy_swapchain(handle, None);
-        surface_api.destroy_surface(data.surface, None);
-    }
-
-    Ok(())
-}
-
-pub(super) fn frame_objects(swapchain: &Swapchain) -> (usize, &FrameSyncObjects) {
-    let index = (swapchain.current_frame % DESIRED_SWAPCHAIN_LENGTH) as usize;
-    (index, &swapchain.frame_sync_objects[index])
-}
-
-pub(super) fn wait_idle(device: &Device, swapchain: &Swapchain) -> Result<(), Error> {
-    let fences = [
-        swapchain.frame_sync_objects[0].fence,
-        swapchain.frame_sync_objects[1].fence,
-    ];
-
-    unsafe { device.device.wait_for_fences(&fences, true, u64::MAX) }?;
-    Ok(())
-}
-
-pub(super) fn acquire_next_image(
-    device: &Device,
-    handle: vk::SwapchainKHR,
-    swapchain: &mut Swapchain,
-) -> Result<(), Error> {
-    let (_, sync_objects) = frame_objects(swapchain);
+    pub(super) fn resize(
+        &mut self,
+        device: &Device,
+        new_size: vk::Extent2D,
+        surface_api: &ash::extensions::khr::Surface,
+    ) -> Result<(), Error> {
+        assert_eq!(self.current_image, None);
+        self.wait_idle(device)?;
     
-    let vkdevice = &device.device;
-    unsafe { vkdevice.wait_for_fences(&[sync_objects.fence], true, u64::MAX) }?;
-
-    let (index, needs_resize) = unsafe {
-        device.swapchain_api.acquire_next_image(
-            handle,
-            u64::MAX,
-            sync_objects.acquire_semaphore,
-            vk::Fence::null(),
-        )?
-    };
-
-    if needs_resize {
-        Err(Error::SwapchainOutOfDate)
-    } else {
-        unsafe { device.device.reset_fences(&[sync_objects.fence]) }?;
-        swapchain.current_image = Some(index);
+        let (handle, format, extent, image_views) = create_raw_swapchain(
+            device,
+            self.surface,
+            new_size,
+            self.handle,
+            surface_api,
+        )?;
+    
+        unsafe {
+            device
+                .swapchain_api
+                .destroy_swapchain(self.handle, None);
+    
+            for image_view in self.image_views.drain(..) {
+                device.device.destroy_image_view(image_view, None);
+            }
+        }
+    
+        self.handle = handle;
+        self.format = format;
+        self.extent = extent;
+        self.image_views = image_views;
+    
         Ok(())
     }
-}
-
-pub(super) fn present(
-    device: &Device,
-    handle: vk::SwapchainKHR,
-    swapchain: &mut Swapchain,
-) -> Result<(), Error> {
-    let (_, frame_objects) = frame_objects(swapchain);
-
-    let out_of_date = unsafe {
-        device.swapchain_api.queue_present(
-            device.present_queue,
-            &vk::PresentInfoKHR::builder()
-                .wait_semaphores(&[frame_objects.present_semaphore])
-                .swapchains(&[handle])
-                .image_indices(&[swapchain.current_image.take().unwrap()]),
-        )
-    }?;
-
-    swapchain.current_frame += 1;
-
-    if out_of_date {
-        Err(Error::SwapchainOutOfDate)
-    } else {
+    
+    pub(super) fn destroy(
+        &mut self,
+        device: &Device,
+        surface_api: &ash::extensions::khr::Surface,
+    ) -> Result<(), Error> {
+        self.wait_idle(device)?;
+    
+        let vkdevice = &device.device;
+        unsafe {
+            for view in self.image_views.drain(..) {
+                vkdevice.destroy_image_view(view, None);
+            }
+    
+            for sync in &self.frame_sync_objects {
+                vkdevice.destroy_semaphore(sync.acquire_semaphore, None);
+                vkdevice.destroy_semaphore(sync.present_semaphore, None);
+                vkdevice.destroy_fence(sync.fence, None);
+            }
+    
+            device
+                .swapchain_api
+                .destroy_swapchain(self.handle, None);
+            surface_api.destroy_surface(self.surface, None);
+        }
+    
         Ok(())
+    }
+    
+    pub(super) fn frame_objects(&self) -> (usize, &FrameSyncObjects) {
+        let index = (self.current_frame % DESIRED_SWAPCHAIN_LENGTH) as usize;
+        (index, &self.frame_sync_objects[index])
+    }
+    
+    pub(super) fn wait_idle(&self, device: &Device) -> Result<(), Error> {
+        let fences = [
+            self.frame_sync_objects[0].fence,
+            self.frame_sync_objects[1].fence,
+        ];
+    
+        unsafe { device.device.wait_for_fences(&fences, true, u64::MAX) }?;
+        Ok(())
+    }
+    
+    pub(super) fn acquire_next_image(&mut self, device: &Device) -> Result<(), Error> {
+        let (_, sync_objects) = self.frame_objects();
+    
+        let vkdevice = &device.device;
+        unsafe { vkdevice.wait_for_fences(&[sync_objects.fence], true, u64::MAX) }?;
+    
+        let (index, needs_resize) = unsafe {
+            device.swapchain_api.acquire_next_image(
+                self.handle,
+                u64::MAX,
+                sync_objects.acquire_semaphore,
+                vk::Fence::null(),
+            )?
+        };
+    
+        if needs_resize {
+            Err(Error::SwapchainOutOfDate)
+        } else {
+            unsafe { device.device.reset_fences(&[sync_objects.fence]) }?;
+            self.current_image = Some(index);
+            Ok(())
+        }
+    }
+    
+    pub(super) fn present(&mut self, device: &Device) -> Result<(), Error> {
+        let (_, frame_objects) = self.frame_objects();
+    
+        let out_of_date = unsafe {
+            device.swapchain_api.queue_present(
+                device.present_queue,
+                &vk::PresentInfoKHR::builder()
+                    .wait_semaphores(&[frame_objects.present_semaphore])
+                    .swapchains(&[self.handle])
+                    .image_indices(&[self.current_image.take().unwrap()]),
+            )
+        }?;
+    
+        self.current_frame += 1;
+    
+        if out_of_date {
+            Err(Error::SwapchainOutOfDate)
+        } else {
+            Ok(())
+        }
     }
 }
 
