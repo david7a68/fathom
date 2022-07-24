@@ -1,9 +1,12 @@
+mod color;
 mod indexed_store;
+mod point;
 mod renderer;
 
 use std::{cell::RefCell, rc::Rc};
 
-use ash::vk;
+use color::Color;
+use point::Point;
 use windows::{
     core::PCWSTR,
     Win32::{
@@ -20,7 +23,7 @@ use windows::{
     },
 };
 
-use renderer::{Renderer, SwapchainHandle};
+use renderer::{Renderer, SwapchainHandle, Vertex};
 
 const WINDOW_TITLE: &str = "Hello!";
 
@@ -29,6 +32,36 @@ const WINDOW_TITLE: &str = "Hello!";
 const WNDCLASS_NAME: &[u16] = &[
     0x0046, 0x0041, 0x0054, 0x0048, 0x004f, 0x004d, 0x005f, 0x0057, 0x004e, 0x0044, 0x0043, 0x004c,
     0x0041, 0x0053, 0x0053,
+];
+
+const TRIANGLE: [Vertex; 3] = [
+    Vertex {
+        point: Point { x: 0.0, y: -0.5 },
+        color: Color {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        },
+    },
+    Vertex {
+        point: Point { x: 0.5, y: 0.5 },
+        color: Color {
+            r: 0.0,
+            g: 1.0,
+            b: 0.0,
+            a: 1.0,
+        },
+    },
+    Vertex {
+        point: Point { x: -0.5, y: 0.5 },
+        color: Color {
+            r: 0.0,
+            g: 0.0,
+            b: 1.0,
+            a: 1.0,
+        },
+    },
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -114,10 +147,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 DispatchMessageW(&msg);
             }
         }
-
-        // let mut renderer = renderer.borrow_mut();
-        // swapchain = renderer.begin_frame(swapchain).unwrap();
-        // renderer.end_frame(swapchain).unwrap();
     }
 
     renderer.borrow_mut().destroy_swapchain(swapchain).unwrap();
@@ -149,7 +178,7 @@ impl Window {
         if width > 0 && height > 0 {
             let mut renderer = self.renderer.borrow_mut();
             renderer.begin_frame(self.swapchain).unwrap();
-            renderer.end_frame(self.swapchain).unwrap();
+            renderer.end_frame(self.swapchain, &TRIANGLE).unwrap();
         }
     }
 }

@@ -1,6 +1,7 @@
 mod error;
 mod pipeline;
 mod swapchain;
+mod vertex;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -21,6 +22,8 @@ use self::{
     swapchain::{Swapchain, FRAMES_IN_FLIGHT},
 };
 
+pub use vertex::Vertex;
+
 const VALIDATION_LAYER: *const i8 = b"VK_LAYER_KHRONOS_validation\0".as_ptr().cast();
 
 const INSTANCE_EXTENSIONS: [*const i8; 2] = [
@@ -34,6 +37,9 @@ const DEVICE_EXTENSIONS: [*const i8; 1] = [b"VK_KHR_swapchain\0".as_ptr().cast()
 struct Device {
     device: ash::Device,
     gpu: vk::PhysicalDevice,
+
+    memory_properties: vk::PhysicalDeviceMemoryProperties,
+
     swapchain_api: ash::extensions::khr::Swapchain,
 
     graphics_family: u32,
@@ -44,8 +50,80 @@ struct Device {
     command_pool: vk::CommandPool,
 }
 
+#[derive(Default)]
+struct GeometryBuffer {
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    size: vk::DeviceSize,
+}
+
+impl GeometryBuffer {
+    fn upload_to_gpu(&mut self, device: &Device, vertices: &[Vertex]) -> Result<(), Error> {
+        let vkdevice = &device.device;
+        let vertex_buffer_size = (vertices.len() * std::mem::size_of::<Vertex>()) as vk::DeviceSize;
+
+        if self.size < vertex_buffer_size {
+            let new_size = (vertex_buffer_size).next_power_of_two();
+
+            dbg!(
+                "resizing vertex buffer from {} to {} bytes",
+                self.size,
+                new_size
+            );
+
+            unsafe {
+                vkdevice.destroy_buffer(self.buffer, None);
+                vkdevice.free_memory(self.memory, None);
+            }
+
+            let buffer_info = vk::BufferCreateInfo {
+                size: new_size,
+                usage: vk::BufferUsageFlags::VERTEX_BUFFER,
+                sharing_mode: vk::SharingMode::EXCLUSIVE,
+                ..Default::default()
+            };
+
+            let buffer = unsafe { vkdevice.create_buffer(&buffer_info, None) }?;
+            let memory_requirements = unsafe { vkdevice.get_buffer_memory_requirements(buffer) };
+
+            let memory_allocate_info = vk::MemoryAllocateInfo {
+                allocation_size: memory_requirements.size.next_power_of_two(),
+                memory_type_index: find_memory_type(
+                    device,
+                    memory_requirements.memory_type_bits,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )
+                .unwrap(),
+                ..Default::default()
+            };
+
+            let memory = unsafe { vkdevice.allocate_memory(&memory_allocate_info, None) }?;
+            unsafe { vkdevice.bind_buffer_memory(buffer, memory, 0) }?;
+
+            self.buffer = buffer;
+            self.memory = memory;
+            self.size = new_size;
+        }
+
+        unsafe {
+            let mapped_memory = vkdevice.map_memory(
+                self.memory,
+                0,
+                vertex_buffer_size,
+                vk::MemoryMapFlags::empty(),
+            )?;
+            let mapped_slice = std::slice::from_raw_parts_mut(mapped_memory.cast(), vertices.len());
+            mapped_slice.copy_from_slice(vertices);
+            vkdevice.unmap_memory(self.memory);
+        }
+
+        Ok(())
+    }
+}
+
 struct RenderState {
     command_buffers: [vk::CommandBuffer; FRAMES_IN_FLIGHT as usize],
+    geometry_buffers: [GeometryBuffer; FRAMES_IN_FLIGHT as usize],
     frame_buffers: Vec<vk::Framebuffer>,
 }
 
@@ -213,11 +291,13 @@ impl Renderer {
         }
     }
 
-    pub fn end_frame(&mut self, handle: SwapchainHandle) -> Result<(), Error> {
+    pub fn end_frame(&mut self, handle: SwapchainHandle, vertices: &[Vertex]) -> Result<(), Error> {
         let device = self.device.as_ref().unwrap();
         let (swapchain, render_state) = self.swapchains.get_mut(handle.0).unwrap();
 
         let (frame_index, frame_objects) = swapchain.frame_objects();
+
+        render_state.geometry_buffers[frame_index].upload_to_gpu(device, vertices)?;
 
         let command_buffer = pipeline::record_draw(
             &device.device,
@@ -225,6 +305,8 @@ impl Renderer {
             render_state.command_buffers[frame_index],
             render_state.frame_buffers[swapchain.current_image.unwrap() as usize],
             swapchain.extent,
+            render_state.geometry_buffers[frame_index].buffer,
+            vertices.len() as u32,
         )?;
 
         unsafe {
@@ -411,6 +493,8 @@ fn init_device(
 
     let swapchain_api = { ash::extensions::khr::Swapchain::new(instance, &device) };
 
+    let memory_properties = unsafe { instance.get_physical_device_memory_properties(gpu) };
+
     let command_pool = {
         let pool_ci = vk::CommandPoolCreateInfo::builder()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
@@ -422,6 +506,7 @@ fn init_device(
     Ok(Device {
         device,
         gpu,
+        memory_properties,
         swapchain_api,
         graphics_family,
         present_family,
@@ -492,6 +577,7 @@ fn init_render_state(
     Ok(RenderState {
         command_buffers,
         frame_buffers,
+        geometry_buffers: [GeometryBuffer::default(), GeometryBuffer::default()],
     })
 }
 
@@ -503,5 +589,28 @@ fn destroy_render_state(device: &Device, mut state: RenderState) {
         for framebuffer in state.frame_buffers.drain(..) {
             vkdevice.destroy_framebuffer(framebuffer, None);
         }
+
+        for geometry_buffer in &state.geometry_buffers {
+            vkdevice.destroy_buffer(geometry_buffer.buffer, None);
+            vkdevice.free_memory(geometry_buffer.memory, None);
+        }
     }
+}
+
+fn find_memory_type(
+    device: &Device,
+    type_filter: u32,
+    needed_properties: vk::MemoryPropertyFlags,
+) -> Option<u32> {
+    for i in 0..device.memory_properties.memory_type_count {
+        if (type_filter & (1 << i)) != 0
+            && device.memory_properties.memory_types[i as usize]
+                .property_flags
+                .contains(needed_properties)
+        {
+            return Some(i);
+        }
+    }
+
+    None
 }

@@ -2,7 +2,7 @@ use std::ffi::CStr;
 
 use ash::vk;
 
-use super::error::Error;
+use super::{error::Error, vertex::Vertex};
 
 const SHADER_MAIN: *const i8 = b"main\0".as_ptr().cast();
 const UI_FRAG_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.frag.spv"));
@@ -98,7 +98,11 @@ pub fn create(device: &ash::Device, swapchain_format: vk::Format) -> Result<Pipe
         let dynamic_state_ci =
             vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_states);
 
-        let vertex_input_ci = vk::PipelineVertexInputStateCreateInfo::builder();
+        let binding_descriptions = &[Vertex::BINDING_DESCRIPTION];
+        let attribute_descriptions = &Vertex::ATTRIBUTE_DESCRIPTIONS;
+        let vertex_input_ci = vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_attribute_descriptions(attribute_descriptions)
+            .vertex_binding_descriptions(binding_descriptions);
 
         let input_assembly_ci = vk::PipelineInputAssemblyStateCreateInfo::builder()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
@@ -173,6 +177,8 @@ pub fn record_draw(
     command_buffer: vk::CommandBuffer,
     frame_buffer: vk::Framebuffer,
     viewport: vk::Extent2D,
+    vertex_buffer: vk::Buffer,
+    num_vertices: u32,
 ) -> Result<vk::CommandBuffer, Error> {
     unsafe {
         vkdevice.begin_command_buffer(
@@ -226,7 +232,10 @@ pub fn record_draw(
             }),
         );
 
-        vkdevice.cmd_draw(command_buffer, 3, 1, 0, 0);
+        vkdevice.cmd_bind_vertex_buffers(command_buffer, 0, &[vertex_buffer], &[0]);
+
+        vkdevice.cmd_draw(command_buffer, num_vertices, 1, 0, 0);
+
         vkdevice.cmd_end_render_pass(command_buffer);
         vkdevice.end_command_buffer(command_buffer)?;
     }
