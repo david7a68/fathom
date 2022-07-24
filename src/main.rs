@@ -64,6 +64,8 @@ const TRIANGLE: [Vertex; 3] = [
     },
 ];
 
+const INDICES: [u16; 6] = [0, 1, 2, 2, 3, 0];
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hinstance = unsafe { GetModuleHandleW(None)? };
 
@@ -178,7 +180,9 @@ impl Window {
         if width > 0 && height > 0 {
             let mut renderer = self.renderer.borrow_mut();
             renderer.begin_frame(self.swapchain).unwrap();
-            renderer.end_frame(self.swapchain, &TRIANGLE).unwrap();
+            renderer
+                .end_frame(self.swapchain, &TRIANGLE, &INDICES)
+                .unwrap();
         }
     }
 }

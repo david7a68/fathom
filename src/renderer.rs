@@ -52,45 +52,72 @@ struct Device {
 
 #[derive(Default)]
 struct GeometryBuffer {
-    buffer: vk::Buffer,
+    vertex_buffer: vk::Buffer,
+    index_buffer: vk::Buffer,
     memory: vk::DeviceMemory,
     size: vk::DeviceSize,
 }
 
 impl GeometryBuffer {
-    fn upload_to_gpu(&mut self, device: &Device, vertices: &[Vertex]) -> Result<(), Error> {
+    fn upload_to_gpu(
+        &mut self,
+        device: &Device,
+        vertices: &[Vertex],
+        indices: &[u16],
+    ) -> Result<(), Error> {
         let vkdevice = &device.device;
-        let vertex_buffer_size = (vertices.len() * std::mem::size_of::<Vertex>()) as vk::DeviceSize;
+        let vertex_buffer_size = std::mem::size_of_val(vertices) as vk::DeviceSize;
+        let index_buffer_size = std::mem::size_of_val(indices) as vk::DeviceSize;
 
-        if self.size < vertex_buffer_size {
-            let new_size = (vertex_buffer_size).next_power_of_two();
+        unsafe {
+            vkdevice.destroy_buffer(self.vertex_buffer, None);
+            vkdevice.destroy_buffer(self.index_buffer, None);
+        }
 
-            dbg!(
-                "resizing vertex buffer from {} to {} bytes",
-                self.size,
-                new_size
-            );
-
-            unsafe {
-                vkdevice.destroy_buffer(self.buffer, None);
-                vkdevice.free_memory(self.memory, None);
-            }
-
+        self.vertex_buffer = {
             let buffer_info = vk::BufferCreateInfo {
-                size: new_size,
-                usage: vk::BufferUsageFlags::VERTEX_BUFFER,
+                size: vertex_buffer_size,
+                usage: vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER,
                 sharing_mode: vk::SharingMode::EXCLUSIVE,
                 ..Default::default()
             };
 
-            let buffer = unsafe { vkdevice.create_buffer(&buffer_info, None) }?;
-            let memory_requirements = unsafe { vkdevice.get_buffer_memory_requirements(buffer) };
+            unsafe { vkdevice.create_buffer(&buffer_info, None) }?
+        };
+
+        let vertex_buffer_requirements =
+            unsafe { vkdevice.get_buffer_memory_requirements(self.vertex_buffer) };
+
+        self.index_buffer = {
+            let buffer_info = vk::BufferCreateInfo {
+                size: index_buffer_size,
+                usage: vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER,
+                sharing_mode: vk::SharingMode::EXCLUSIVE,
+                ..Default::default()
+            };
+
+            unsafe { vkdevice.create_buffer(&buffer_info, None) }?
+        };
+
+        let index_buffer_requirements =
+            unsafe { vkdevice.get_buffer_memory_requirements(self.index_buffer) };
+
+        assert_eq!(
+            vertex_buffer_requirements.alignment % index_buffer_requirements.alignment,
+            0
+        );
+
+        let num_required_bytes =
+            (vertex_buffer_requirements.size + index_buffer_requirements.size).next_power_of_two();
+
+        if self.size < num_required_bytes {
+            unsafe { vkdevice.free_memory(self.memory, None) };
 
             let memory_allocate_info = vk::MemoryAllocateInfo {
-                allocation_size: memory_requirements.size.next_power_of_two(),
+                allocation_size: num_required_bytes,
                 memory_type_index: find_memory_type(
                     device,
-                    memory_requirements.memory_type_bits,
+                    vertex_buffer_requirements.memory_type_bits,
                     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
                 )
                 .unwrap(),
@@ -98,22 +125,30 @@ impl GeometryBuffer {
             };
 
             let memory = unsafe { vkdevice.allocate_memory(&memory_allocate_info, None) }?;
-            unsafe { vkdevice.bind_buffer_memory(buffer, memory, 0) }?;
 
-            self.buffer = buffer;
             self.memory = memory;
-            self.size = new_size;
+            self.size = num_required_bytes;
         }
 
         unsafe {
-            let mapped_memory = vkdevice.map_memory(
+            vkdevice.bind_buffer_memory(self.vertex_buffer, self.memory, 0)?;
+            let vertex_memory =
+                vkdevice.map_memory(self.memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())?;
+            let mapped_slice = std::slice::from_raw_parts_mut(vertex_memory.cast(), vertices.len());
+            mapped_slice.copy_from_slice(vertices);
+            vkdevice.unmap_memory(self.memory);
+        }
+
+        unsafe {
+            vkdevice.bind_buffer_memory(self.index_buffer, self.memory, vertex_buffer_size)?;
+            let index_memory = vkdevice.map_memory(
                 self.memory,
-                0,
                 vertex_buffer_size,
+                vk::WHOLE_SIZE,
                 vk::MemoryMapFlags::empty(),
             )?;
-            let mapped_slice = std::slice::from_raw_parts_mut(mapped_memory.cast(), vertices.len());
-            mapped_slice.copy_from_slice(vertices);
+            let mapped_slice = std::slice::from_raw_parts_mut(index_memory.cast(), indices.len());
+            mapped_slice.copy_from_slice(indices);
             vkdevice.unmap_memory(self.memory);
         }
 
@@ -269,20 +304,18 @@ impl Renderer {
         match swapchain.acquire_next_image(device) {
             Ok(_) => Ok(()),
             Err(Error::SwapchainOutOfDate) => {
-                let (swapchain, old_render_state) = self.swapchains.get_mut(handle.0).unwrap();
+                let (swapchain, render_state) = self.swapchains.get_mut(handle.0).unwrap();
 
                 swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
 
-                let mut new_render_state = init_render_state(
+                update_render_state(
                     device,
                     &mut self.pipelines,
+                    render_state,
                     swapchain.format,
                     &swapchain.image_views,
                     swapchain.extent,
                 )?;
-
-                std::mem::swap(&mut new_render_state, old_render_state);
-                destroy_render_state(device, new_render_state);
 
                 swapchain.acquire_next_image(device)?;
                 Ok(())
@@ -291,13 +324,18 @@ impl Renderer {
         }
     }
 
-    pub fn end_frame(&mut self, handle: SwapchainHandle, vertices: &[Vertex]) -> Result<(), Error> {
+    pub fn end_frame(
+        &mut self,
+        handle: SwapchainHandle,
+        vertices: &[Vertex],
+        indices: &[u16],
+    ) -> Result<(), Error> {
         let device = self.device.as_ref().unwrap();
         let (swapchain, render_state) = self.swapchains.get_mut(handle.0).unwrap();
 
         let (frame_index, frame_objects) = swapchain.frame_objects();
 
-        render_state.geometry_buffers[frame_index].upload_to_gpu(device, vertices)?;
+        render_state.geometry_buffers[frame_index].upload_to_gpu(device, vertices, indices)?;
 
         let command_buffer = pipeline::record_draw(
             &device.device,
@@ -305,8 +343,9 @@ impl Renderer {
             render_state.command_buffers[frame_index],
             render_state.frame_buffers[swapchain.current_image.unwrap() as usize],
             swapchain.extent,
-            render_state.geometry_buffers[frame_index].buffer,
-            vertices.len() as u32,
+            render_state.geometry_buffers[frame_index].vertex_buffer,
+            render_state.geometry_buffers[frame_index].index_buffer,
+            indices.len() as u16,
         )?;
 
         unsafe {
@@ -326,20 +365,18 @@ impl Renderer {
         match swapchain.present(device) {
             Ok(_) => Ok(()),
             Err(Error::SwapchainOutOfDate) => {
-                let (swapchain, old_render_state) = self.swapchains.get_mut(handle.0).unwrap();
+                let (swapchain, render_state) = self.swapchains.get_mut(handle.0).unwrap();
 
                 swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
 
-                let mut new_render_state = init_render_state(
+                update_render_state(
                     device,
                     &mut self.pipelines,
+                    render_state,
                     swapchain.format,
                     &swapchain.image_views,
                     swapchain.extent,
                 )?;
-
-                std::mem::swap(&mut new_render_state, old_render_state);
-                destroy_render_state(device, new_render_state);
 
                 swapchain.acquire_next_image(device)?;
                 Ok(())
@@ -581,6 +618,46 @@ fn init_render_state(
     })
 }
 
+fn update_render_state(
+    device: &Device,
+    pipelines: &mut HashMap<vk::Format, pipeline::Pipeline>,
+    state: &mut RenderState,
+    swapchain_format: vk::Format,
+    image_views: &[vk::ImageView],
+    image_extent: vk::Extent2D,
+) -> Result<(), Error> {
+    let vkdevice = &device.device;
+
+    let pipeline = if let Some(pipeline) = pipelines.get(&swapchain_format) {
+        pipeline
+    } else {
+        pipelines.insert(
+            swapchain_format,
+            pipeline::create(vkdevice, swapchain_format)?,
+        );
+        pipelines.get(&swapchain_format).unwrap()
+    };
+
+    for framebuffer in state.frame_buffers.drain(..) {
+        unsafe { vkdevice.destroy_framebuffer(framebuffer, None) }
+    }
+
+    for view in image_views {
+        let framebuffer_ci = vk::FramebufferCreateInfo::builder()
+            .render_pass(pipeline.render_pass)
+            .attachments(std::slice::from_ref(&*view))
+            .width(image_extent.width)
+            .height(image_extent.height)
+            .layers(1);
+
+        state
+            .frame_buffers
+            .push(unsafe { vkdevice.create_framebuffer(&framebuffer_ci, None) }?);
+    }
+
+    Ok(())
+}
+
 fn destroy_render_state(device: &Device, mut state: RenderState) {
     let vkdevice = &device.device;
     unsafe {
@@ -591,7 +668,8 @@ fn destroy_render_state(device: &Device, mut state: RenderState) {
         }
 
         for geometry_buffer in &state.geometry_buffers {
-            vkdevice.destroy_buffer(geometry_buffer.buffer, None);
+            vkdevice.destroy_buffer(geometry_buffer.vertex_buffer, None);
+            vkdevice.destroy_buffer(geometry_buffer.index_buffer, None);
             vkdevice.free_memory(geometry_buffer.memory, None);
         }
     }

@@ -178,7 +178,8 @@ pub fn record_draw(
     frame_buffer: vk::Framebuffer,
     viewport: vk::Extent2D,
     vertex_buffer: vk::Buffer,
-    num_vertices: u32,
+    index_buffer: vk::Buffer,
+    num_indices: u16,
 ) -> Result<vk::CommandBuffer, Error> {
     unsafe {
         vkdevice.begin_command_buffer(
@@ -233,8 +234,9 @@ pub fn record_draw(
         );
 
         vkdevice.cmd_bind_vertex_buffers(command_buffer, 0, &[vertex_buffer], &[0]);
+        vkdevice.cmd_bind_index_buffer(command_buffer, index_buffer, 0, vk::IndexType::UINT16);
 
-        vkdevice.cmd_draw(command_buffer, num_vertices, 1, 0, 0);
+        vkdevice.cmd_draw_indexed(command_buffer, num_indices.into(), 1, 0, 0, 0);
 
         vkdevice.cmd_end_render_pass(command_buffer);
         vkdevice.end_command_buffer(command_buffer)?;
