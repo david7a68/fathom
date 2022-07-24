@@ -162,6 +162,123 @@ struct RenderState {
     frame_buffers: Vec<vk::Framebuffer>,
 }
 
+impl RenderState {
+    fn new(
+        device: &Device,
+        pipelines: &mut HashMap<vk::Format, pipeline::Pipeline>,
+        swapchain: &Swapchain,
+    ) -> Result<Self, Error> {
+        let vkdevice = &device.device;
+        let command_buffers = {
+            let mut array = [vk::CommandBuffer::null(); FRAMES_IN_FLIGHT as usize];
+
+            let command_buffer_ai = vk::CommandBufferAllocateInfo::builder()
+                .command_pool(device.command_pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(FRAMES_IN_FLIGHT)
+                .build();
+
+            let vk_result = unsafe {
+                (vkdevice.fp_v1_0().allocate_command_buffers)(
+                    vkdevice.handle(),
+                    &command_buffer_ai,
+                    array.as_mut_ptr(),
+                )
+            };
+
+            if vk_result != vk::Result::SUCCESS {
+                return Err(Error::Vulkan(vk_result));
+            }
+
+            array
+        };
+
+        let pipeline = if let Some(pipeline) = pipelines.get(&swapchain.format) {
+            pipeline
+        } else {
+            pipelines.insert(
+                swapchain.format,
+                pipeline::create(vkdevice, swapchain.format)?,
+            );
+            pipelines.get(&swapchain.format).unwrap()
+        };
+
+        let frame_buffers = {
+            let mut frame_buffers = Vec::with_capacity(swapchain.image_views.len());
+
+            for view in &swapchain.image_views {
+                let framebuffer_ci = vk::FramebufferCreateInfo::builder()
+                    .render_pass(pipeline.render_pass)
+                    .attachments(std::slice::from_ref(&*view))
+                    .width(swapchain.extent.width)
+                    .height(swapchain.extent.height)
+                    .layers(1);
+
+                frame_buffers.push(unsafe { vkdevice.create_framebuffer(&framebuffer_ci, None) }?);
+            }
+            frame_buffers
+        };
+
+        Ok(Self {
+            command_buffers,
+            frame_buffers,
+            geometry_buffers: [GeometryBuffer::default(), GeometryBuffer::default()],
+        })
+    }
+
+    fn destroy_with(&mut self, device: &Device) {
+        let vkdevice = &device.device;
+        unsafe {
+            vkdevice.free_command_buffers(device.command_pool, &self.command_buffers);
+
+            for framebuffer in self.frame_buffers.drain(..) {
+                vkdevice.destroy_framebuffer(framebuffer, None);
+            }
+
+            for geometry_buffer in &self.geometry_buffers {
+                vkdevice.destroy_buffer(geometry_buffer.vertex_buffer, None);
+                vkdevice.destroy_buffer(geometry_buffer.index_buffer, None);
+                vkdevice.free_memory(geometry_buffer.memory, None);
+            }
+        }
+    }
+
+    fn update(
+        &mut self,
+        device: &Device,
+        pipelines: &mut HashMap<vk::Format, pipeline::Pipeline>,
+        swapchain: &Swapchain,
+    ) -> Result<(), Error> {
+        let pipeline = if let Some(pipeline) = pipelines.get(&swapchain.format) {
+            pipeline
+        } else {
+            pipelines.insert(
+                swapchain.format,
+                pipeline::create(&device.device, swapchain.format)?,
+            );
+            pipelines.get(&swapchain.format).unwrap()
+        };
+
+        for framebuffer in self.frame_buffers.drain(..) {
+            unsafe { device.device.destroy_framebuffer(framebuffer, None) }
+        }
+
+        for view in &swapchain.image_views {
+            let framebuffer_ci = vk::FramebufferCreateInfo::builder()
+                .render_pass(pipeline.render_pass)
+                .attachments(std::slice::from_ref(&*view))
+                .width(swapchain.extent.width)
+                .height(swapchain.extent.height)
+                .layers(1);
+
+            self.frame_buffers
+                .push(unsafe { device.device.create_framebuffer(&framebuffer_ci, None) }?);
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct SwapchainHandle(Index);
 
@@ -273,13 +390,7 @@ impl Renderer {
             self.device
                 .get_or_insert(init_device(&self.instance, &self.surface_api, surface)?);
         let swapchain = Swapchain::new(device, surface, extent, &self.surface_api)?;
-        let render_state = init_render_state(
-            device,
-            &mut self.pipelines,
-            swapchain.format,
-            &swapchain.image_views,
-            extent,
-        )?;
+        let render_state = RenderState::new(device, &mut self.pipelines, &swapchain)?;
 
         let handle = self
             .swapchains
@@ -289,10 +400,10 @@ impl Renderer {
     }
 
     pub fn destroy_swapchain(&mut self, handle: SwapchainHandle) -> Result<(), Error> {
-        if let Some((mut swapchain, state)) = self.swapchains.remove(handle.0) {
+        if let Some((mut swapchain, mut state)) = self.swapchains.remove(handle.0) {
             let device = self.device.as_ref().unwrap();
-            swapchain.destroy(device, &self.surface_api).unwrap();
-            destroy_render_state(device, state);
+            swapchain.destroy_with(device, &self.surface_api).unwrap();
+            state.destroy_with(device);
         }
         Ok(())
     }
@@ -307,15 +418,7 @@ impl Renderer {
                 let (swapchain, render_state) = self.swapchains.get_mut(handle.0).unwrap();
 
                 swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
-
-                update_render_state(
-                    device,
-                    &mut self.pipelines,
-                    render_state,
-                    swapchain.format,
-                    &swapchain.image_views,
-                    swapchain.extent,
-                )?;
+                render_state.update(device, &mut self.pipelines, swapchain)?;
 
                 swapchain.acquire_next_image(device)?;
                 Ok(())
@@ -368,15 +471,7 @@ impl Renderer {
                 let (swapchain, render_state) = self.swapchains.get_mut(handle.0).unwrap();
 
                 swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
-
-                update_render_state(
-                    device,
-                    &mut self.pipelines,
-                    render_state,
-                    swapchain.format,
-                    &swapchain.image_views,
-                    swapchain.extent,
-                )?;
+                render_state.update(device, &mut self.pipelines, swapchain)?;
 
                 swapchain.acquire_next_image(device)?;
                 Ok(())
@@ -551,128 +646,6 @@ fn init_device(
         present_queue,
         command_pool,
     })
-}
-
-fn init_render_state(
-    device: &Device,
-    pipelines: &mut HashMap<vk::Format, pipeline::Pipeline>,
-    swapchain_format: vk::Format,
-    image_views: &[vk::ImageView],
-    image_extent: vk::Extent2D,
-) -> Result<RenderState, Error> {
-    let vkdevice = &device.device;
-    let command_buffers = {
-        let mut array = [vk::CommandBuffer::null(); FRAMES_IN_FLIGHT as usize];
-
-        let command_buffer_ai = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(device.command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(FRAMES_IN_FLIGHT)
-            .build();
-
-        let vk_result = unsafe {
-            (vkdevice.fp_v1_0().allocate_command_buffers)(
-                vkdevice.handle(),
-                &command_buffer_ai,
-                array.as_mut_ptr(),
-            )
-        };
-
-        if vk_result != vk::Result::SUCCESS {
-            return Err(Error::Vulkan(vk_result));
-        }
-
-        array
-    };
-
-    let pipeline = if let Some(pipeline) = pipelines.get(&swapchain_format) {
-        pipeline
-    } else {
-        pipelines.insert(
-            swapchain_format,
-            pipeline::create(vkdevice, swapchain_format)?,
-        );
-        pipelines.get(&swapchain_format).unwrap()
-    };
-
-    let frame_buffers = {
-        let mut frame_buffers = Vec::with_capacity(image_views.len());
-
-        for view in image_views {
-            let framebuffer_ci = vk::FramebufferCreateInfo::builder()
-                .render_pass(pipeline.render_pass)
-                .attachments(std::slice::from_ref(&*view))
-                .width(image_extent.width)
-                .height(image_extent.height)
-                .layers(1);
-
-            frame_buffers.push(unsafe { vkdevice.create_framebuffer(&framebuffer_ci, None) }?);
-        }
-        frame_buffers
-    };
-
-    Ok(RenderState {
-        command_buffers,
-        frame_buffers,
-        geometry_buffers: [GeometryBuffer::default(), GeometryBuffer::default()],
-    })
-}
-
-fn update_render_state(
-    device: &Device,
-    pipelines: &mut HashMap<vk::Format, pipeline::Pipeline>,
-    state: &mut RenderState,
-    swapchain_format: vk::Format,
-    image_views: &[vk::ImageView],
-    image_extent: vk::Extent2D,
-) -> Result<(), Error> {
-    let vkdevice = &device.device;
-
-    let pipeline = if let Some(pipeline) = pipelines.get(&swapchain_format) {
-        pipeline
-    } else {
-        pipelines.insert(
-            swapchain_format,
-            pipeline::create(vkdevice, swapchain_format)?,
-        );
-        pipelines.get(&swapchain_format).unwrap()
-    };
-
-    for framebuffer in state.frame_buffers.drain(..) {
-        unsafe { vkdevice.destroy_framebuffer(framebuffer, None) }
-    }
-
-    for view in image_views {
-        let framebuffer_ci = vk::FramebufferCreateInfo::builder()
-            .render_pass(pipeline.render_pass)
-            .attachments(std::slice::from_ref(&*view))
-            .width(image_extent.width)
-            .height(image_extent.height)
-            .layers(1);
-
-        state
-            .frame_buffers
-            .push(unsafe { vkdevice.create_framebuffer(&framebuffer_ci, None) }?);
-    }
-
-    Ok(())
-}
-
-fn destroy_render_state(device: &Device, mut state: RenderState) {
-    let vkdevice = &device.device;
-    unsafe {
-        vkdevice.free_command_buffers(device.command_pool, &state.command_buffers);
-
-        for framebuffer in state.frame_buffers.drain(..) {
-            vkdevice.destroy_framebuffer(framebuffer, None);
-        }
-
-        for geometry_buffer in &state.geometry_buffers {
-            vkdevice.destroy_buffer(geometry_buffer.vertex_buffer, None);
-            vkdevice.destroy_buffer(geometry_buffer.index_buffer, None);
-            vkdevice.free_memory(geometry_buffer.memory, None);
-        }
-    }
 }
 
 fn find_memory_type(

@@ -99,7 +99,7 @@ impl Swapchain {
         Ok(())
     }
 
-    pub(super) fn destroy(
+    pub(super) fn destroy_with(
         &mut self,
         device: &Device,
         surface_api: &ash::extensions::khr::Surface,
