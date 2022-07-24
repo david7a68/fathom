@@ -8,6 +8,12 @@ const SHADER_MAIN: *const i8 = b"main\0".as_ptr().cast();
 const UI_FRAG_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.frag.spv"));
 const UI_VERT_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.vert.spv"));
 
+#[repr(C)]
+pub struct PushConstants {
+    pub scale: [f32; 2],
+    pub translate: [f32; 2],
+}
+
 pub struct Pipeline {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
@@ -16,7 +22,15 @@ pub struct Pipeline {
 
 pub fn create(device: &ash::Device, swapchain_format: vk::Format) -> Result<Pipeline, Error> {
     let layout = {
-        let pipeline_layout_ci = vk::PipelineLayoutCreateInfo::builder();
+        let push_constant_range = [vk::PushConstantRange::builder()
+            .offset(0)
+            .size(std::mem::size_of::<PushConstants>() as u32)
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .build()];
+
+        let pipeline_layout_ci =
+            vk::PipelineLayoutCreateInfo::builder().push_constant_ranges(&push_constant_range);
+
         unsafe { device.create_pipeline_layout(&pipeline_layout_ci, None)? }
     };
 
@@ -235,6 +249,39 @@ pub fn record_draw(
 
         vkdevice.cmd_bind_vertex_buffers(command_buffer, 0, &[vertex_buffer], &[0]);
         vkdevice.cmd_bind_index_buffer(command_buffer, index_buffer, 0, vk::IndexType::UINT16);
+
+        // normalize viewport width and viewport height to between -1 and 1
+
+        let scale = [
+            (2.0 / viewport.width as f32),
+            (2.0 / viewport.height as f32),
+        ];
+
+        let mut scale_bytes = [0; 8];
+        scale_bytes[0..4].copy_from_slice(&scale[0].to_ne_bytes());
+        scale_bytes[4..8].copy_from_slice(&scale[1].to_ne_bytes());
+
+        vkdevice.cmd_push_constants(
+            command_buffer,
+            pipeline.layout,
+            vk::ShaderStageFlags::VERTEX,
+            0,
+            &scale_bytes,
+        );
+
+        let translate = [-1.0 * scale[0], -1.0 * scale[1]];
+
+        let mut translate_bytes = [0; 8];
+        translate_bytes[0..4].copy_from_slice(&translate[0].to_ne_bytes());
+        translate_bytes[4..8].copy_from_slice(&translate[1].to_ne_bytes());
+
+        vkdevice.cmd_push_constants(
+            command_buffer,
+            pipeline.layout,
+            vk::ShaderStageFlags::VERTEX,
+            scale_bytes.len() as u32,
+            &translate_bytes,
+        );
 
         vkdevice.cmd_draw_indexed(command_buffer, num_indices.into(), 1, 0, 0, 0);
 

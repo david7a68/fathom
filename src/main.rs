@@ -36,7 +36,7 @@ const WNDCLASS_NAME: &[u16] = &[
 
 const TRIANGLE: [Vertex; 3] = [
     Vertex {
-        point: Point { x: 0.0, y: -0.5 },
+        point: Point { x: 0.0, y: -100.0 },
         color: Color {
             r: 1.0,
             g: 0.0,
@@ -45,7 +45,7 @@ const TRIANGLE: [Vertex; 3] = [
         },
     },
     Vertex {
-        point: Point { x: 0.5, y: 0.5 },
+        point: Point { x: 100.0, y: 100.0 },
         color: Color {
             r: 0.0,
             g: 1.0,
@@ -54,7 +54,7 @@ const TRIANGLE: [Vertex; 3] = [
         },
     },
     Vertex {
-        point: Point { x: -0.5, y: 0.5 },
+        point: Point { x: -100.0, y: 100.0 },
         color: Color {
             r: 0.0,
             g: 0.0,
