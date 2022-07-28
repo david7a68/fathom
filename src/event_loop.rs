@@ -120,7 +120,7 @@ impl EventLoop {
         let hinstance = unsafe { GetModuleHandleW(None) }.unwrap();
 
         let _wndclass_atom = {
-            let arrow_cursor = unsafe { LoadCursorW(None, &IDC_ARROW) }.unwrap();
+            let arrow_cursor = unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap();
 
             let wndclass = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>().try_into().unwrap(),
