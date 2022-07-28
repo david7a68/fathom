@@ -7,7 +7,9 @@ mod renderer;
 use std::{cell::RefCell, rc::Rc};
 
 use color::Color;
-use event_loop::{ButtonState, EventLoopControl, MouseButton, WindowHandle, WindowEventHandler};
+use event_loop::{
+    ButtonState, Control, EventReply, MouseButton, WindowEventHandler, WindowHandle,
+};
 use point::Point;
 
 use renderer::{Renderer, SwapchainHandle, Vertex};
@@ -72,38 +74,63 @@ impl Window {
 }
 
 impl WindowEventHandler for Window {
-    fn on_create(&mut self, _control: &mut dyn EventLoopControl, window_handle: WindowHandle) {
+    fn on_create(
+        &mut self,
+        _control: &mut dyn Control,
+        window_handle: WindowHandle,
+    ) -> Result<EventReply, Box<dyn std::error::Error>> {
         let WindowHandle::Windows(hwnd) = window_handle;
         self.swapchain = self.renderer.borrow_mut().create_swapchain(hwnd).unwrap();
+        Ok(EventReply::Continue)
     }
 
-    fn on_destroy(&mut self, _control: &mut dyn EventLoopControl) {
+    fn on_close(
+        &mut self,
+        _control: &mut dyn Control,
+    ) -> Result<EventReply, Box<dyn std::error::Error>> {
+        Ok(EventReply::DestroyWindow)
+    }
+
+    fn on_destroy(
+        &mut self,
+        _control: &mut dyn Control,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.renderer
             .borrow_mut()
-            .destroy_swapchain(self.swapchain)
-            .unwrap();
+            .destroy_swapchain(self.swapchain)?;
+        Ok(())
     }
 
-    fn on_redraw(&mut self, _control: &mut dyn EventLoopControl, width: u32, height: u32) {
+    fn on_redraw(
+        &mut self,
+        _control: &mut dyn Control,
+        width: u32,
+        height: u32,
+    ) -> Result<EventReply, Box<dyn std::error::Error>> {
         if width > 0 && height > 0 {
             let mut renderer = self.renderer.borrow_mut();
-            renderer.begin_frame(self.swapchain).unwrap();
-            renderer
-                .end_frame(self.swapchain, &TRIANGLE, &INDICES)
-                .unwrap();
+            renderer.begin_frame(self.swapchain)?;
+            renderer.end_frame(self.swapchain, &TRIANGLE, &INDICES)?;
         }
+
+        Ok(EventReply::Continue)
     }
 
-    fn on_mouse_move(&mut self, _control: &mut dyn EventLoopControl, new_x: i32, new_y: i32) {
-        println!("{} {}", new_x, new_y);
+    fn on_mouse_move(
+        &mut self,
+        _control: &mut dyn Control,
+        _new_x: i32,
+        _new_y: i32,
+    ) -> Result<EventReply, Box<dyn std::error::Error>> {
+        Ok(EventReply::Continue)
     }
 
     fn on_mouse_button(
         &mut self,
-        control: &mut dyn EventLoopControl,
+        control: &mut dyn Control,
         button: MouseButton,
         state: ButtonState,
-    ) {
+    ) -> Result<EventReply, Box<dyn std::error::Error>> {
         match button {
             MouseButton::Left => match state {
                 ButtonState::Down => {}
@@ -111,9 +138,13 @@ impl WindowEventHandler for Window {
                     control.create_window(Box::new(Window::new(self.renderer.clone())));
                 }
             },
-            MouseButton::Right => {}
+            MouseButton::Right => {
+                if state == ButtonState::Down {
+                    return Ok(EventReply::DestroyWindow);
+                }
+            }
             MouseButton::Middle => {}
         }
-        println!("{:?} {:?}", button, state);
+        Ok(EventReply::Continue)
     }
 }

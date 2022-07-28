@@ -6,13 +6,14 @@ use windows::{
         Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
-            GetWindowLongPtrW, LoadCursorW, PeekMessageW, PostQuitMessage, RegisterClassExW,
-            SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-            CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, PM_REMOVE, SW_SHOW, WINDOW_EX_STYLE,
-            WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-            WM_MBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-            WM_WINDOWPOSCHANGED, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
+            GetMessageW, GetWindowLongPtrW, LoadCursorW, PeekMessageW, PostQuitMessage,
+            RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW,
+            CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, PM_REMOVE,
+            SW_SHOW, WINDOW_EX_STYLE, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
+            WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_WINDOWPOSCHANGED, WNDCLASSEXW,
+            WS_OVERLAPPEDWINDOW,
         },
     },
 };
@@ -26,41 +27,85 @@ const WNDCLASS_NAME: &[u16] = &[
     0x0041, 0x0053, 0x0053, 0,
 ];
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MouseButton {
     Left,
     Right,
     Middle,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ButtonState {
     Down,
     Up,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub enum WindowHandle {
     Windows(HWND),
 }
 
+/// Deferred control of a window event loop. Use this to modify the lifetime of
+/// the window.
+///
+/// IMPL(straivers, 2022-07-28): This design was adopted in order to permit
+/// windows to be destroyed within their event handlers without introducing
+/// re-entrancy. That is to say, calling `event_loop.destroy_window()` in an
+/// event handler would prompt a call to `WindowEventHandler::on_destroy()`
+/// whilst still within a different event handler. This is not possible with the
+/// current design.
+#[must_use]
+#[derive(Default, Debug)]
+pub enum EventReply {
+    /// Continue processing the event loop. The window will remain open and
+    /// accepting input.
+    #[default]
+    Continue,
+    /// Destroy the window after the event handler returns. This will prompt a
+    /// call to `WindowEventHandler::on_destroy()`.
+    DestroyWindow,
+}
+
 pub trait WindowEventHandler {
-    fn on_create(&mut self, event_loop: &mut dyn EventLoopControl, window_handle: WindowHandle);
+    fn on_create(
+        &mut self,
+        control: &mut dyn Control,
+        window_handle: WindowHandle,
+    ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
-    fn on_destroy(&mut self, event_loop: &mut dyn EventLoopControl);
+    fn on_close(
+        &mut self,
+        control: &mut dyn Control,
+    ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
-    fn on_redraw(&mut self, event_loop: &mut dyn EventLoopControl, width: u32, height: u32);
+    fn on_destroy(
+        &mut self,
+        control: &mut dyn Control,
+    ) -> Result<(), Box<dyn std::error::Error>>;
 
-    fn on_mouse_move(&mut self, event_loop: &mut dyn EventLoopControl, new_x: i32, new_y: i32);
+    fn on_redraw(
+        &mut self,
+        control: &mut dyn Control,
+        width: u32,
+        height: u32,
+    ) -> Result<EventReply, Box<dyn std::error::Error>>;
+
+    fn on_mouse_move(
+        &mut self,
+        control: &mut dyn Control,
+        new_x: i32,
+        new_y: i32,
+    ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
     fn on_mouse_button(
         &mut self,
-        event_loop: &mut dyn EventLoopControl,
+        control: &mut dyn Control,
         button: MouseButton,
         state: ButtonState,
-    );
+    ) -> Result<EventReply, Box<dyn std::error::Error>>;
 }
 
-pub trait EventLoopControl {
+pub trait Control {
     fn create_window(&mut self, window: Box<dyn WindowEventHandler>);
 }
 
@@ -127,7 +172,7 @@ impl EventLoop {
     }
 }
 
-impl EventLoopControl for EventLoop {
+impl Control for EventLoop {
     fn create_window(&mut self, window: Box<dyn WindowEventHandler>) {
         self.inner.create_window(window);
     }
@@ -144,7 +189,7 @@ impl Drop for EventLoop {
 
 struct EventLoopInner {}
 
-impl EventLoopControl for Rc<RefCell<EventLoopInner>> {
+impl Control for Rc<RefCell<EventLoopInner>> {
     fn create_window(&mut self, window: Box<dyn WindowEventHandler>) {
         let hinstance = unsafe { GetModuleHandleW(None) }.unwrap();
 
@@ -181,14 +226,32 @@ impl EventLoopControl for Rc<RefCell<EventLoopInner>> {
     }
 }
 
+fn handle_event_reply(window: HWND, reply: Result<EventReply, Box<dyn std::error::Error>>) {
+    match reply {
+        Ok(EventReply::Continue) => (),
+        Ok(EventReply::DestroyWindow) => unsafe {
+            DestroyWindow(window);
+        },
+        Err(e) => {
+            println!("An error occurred while handling a window event: {}", e);
+            unsafe {
+                DestroyWindow(window);
+            }
+        }
+    }
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_CREATE {
         let create_struct = lparam.0 as *const CREATESTRUCTW;
-        let window = (*create_struct).lpCreateParams as *mut WindowData;
+        let window = (*create_struct).lpCreateParams.cast::<WindowData>();
 
-        (*window)
-            .event_handler
-            .on_create(&mut (*window).event_loop, WindowHandle::Windows(hwnd));
+        handle_event_reply(
+            hwnd,
+            (*window)
+                .event_handler
+                .on_create(&mut (*window).event_loop, WindowHandle::Windows(hwnd)),
+        );
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, window as isize);
 
         return LRESULT(1);
@@ -200,20 +263,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
 
+    let event_handler = &mut (*window).event_handler;
+    let event_loop = &mut (*window).event_loop;
+
     match msg {
+        WM_CLOSE => {
+            handle_event_reply(hwnd, event_handler.on_close(event_loop));
+            LRESULT::default()
+        }
         WM_DESTROY => {
-            let mut window = Box::from_raw(window);
-            window.event_handler.on_destroy(&mut window.event_loop);
+            if let Err(e) = event_handler.on_destroy(event_loop) {
+                println!("An error occurred while destroying a window: {}", e);
+            }
 
             // If we only have two strong references, they must be window and
             // the event loop that owns it. Since this is the last window, it is
             // safe to exit the event loop.
-            if Rc::strong_count(&(*window).event_loop) == 2 {
+            if Rc::strong_count(event_loop) == 2 {
                 PostQuitMessage(0);
             }
 
+            std::mem::drop(Box::from_raw(window));
             LRESULT::default()
-            // window is dropped on return
         }
         WM_WINDOWPOSCHANGED => LRESULT::default(),
         WM_ERASEBKGND => LRESULT(1),
@@ -223,67 +294,58 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 GetClientRect(hwnd, &mut rect);
                 (rect.right - rect.left, rect.bottom - rect.top)
             };
-            (*window).event_handler.on_redraw(
-                &mut (*window).event_loop,
-                width as u32,
-                height as u32,
+            handle_event_reply(
+                hwnd,
+                event_handler.on_redraw(event_loop, width as u32, height as u32),
             );
             LRESULT::default()
         }
         WM_MOUSEMOVE => {
             // cast to i16 preserves sign bit
-            let x = lparam.0 as i16 as i32;
-            let y = (lparam.0 >> 16) as i16 as i32;
-            (*window)
-                .event_handler
-                .on_mouse_move(&mut (*window).event_loop, x, y);
+            let x = i32::from(lparam.0 as i16);
+            let y = i32::from((lparam.0 >> 16) as i16);
+            handle_event_reply(hwnd, event_handler.on_mouse_move(event_loop, x, y));
             LRESULT::default()
         }
         WM_LBUTTONDOWN => {
-            (*window).event_handler.on_mouse_button(
-                &mut (*window).event_loop,
-                MouseButton::Left,
-                ButtonState::Down,
+            handle_event_reply(
+                hwnd,
+                event_handler.on_mouse_button(event_loop, MouseButton::Left, ButtonState::Down),
             );
             LRESULT::default()
         }
         WM_LBUTTONUP => {
-            (*window).event_handler.on_mouse_button(
-                &mut (*window).event_loop,
-                MouseButton::Left,
-                ButtonState::Up,
+            handle_event_reply(
+                hwnd,
+                event_handler.on_mouse_button(event_loop, MouseButton::Left, ButtonState::Up),
             );
             LRESULT::default()
         }
         WM_RBUTTONDOWN => {
-            (*window).event_handler.on_mouse_button(
-                &mut (*window).event_loop,
-                MouseButton::Right,
-                ButtonState::Down,
+            handle_event_reply(
+                hwnd,
+                event_handler.on_mouse_button(event_loop, MouseButton::Right, ButtonState::Down),
             );
             LRESULT::default()
         }
         WM_RBUTTONUP => {
-            (*window).event_handler.on_mouse_button(
-                &mut (*window).event_loop,
-                MouseButton::Right,
-                ButtonState::Up,
+            handle_event_reply(
+                hwnd,
+                event_handler.on_mouse_button(event_loop, MouseButton::Right, ButtonState::Up),
             );
             LRESULT::default()
         }
         WM_MBUTTONDOWN => {
-            (*window).event_handler.on_mouse_button(
-                &mut (*window).event_loop,
-                MouseButton::Middle,
-                ButtonState::Down,
+            handle_event_reply(
+                hwnd,
+                event_handler.on_mouse_button(event_loop, MouseButton::Middle, ButtonState::Down),
             );
             LRESULT::default()
         }
         WM_MBUTTONUP => {
-            (*window).event_handler.on_mouse_button(
-                &mut (*window).event_loop,
-                MouseButton::Middle,
-                ButtonState::Up,
+            handle_event_reply(
+                hwnd,
+                event_handler.on_mouse_button(event_loop, MouseButton::Middle, ButtonState::Up),
             );
             LRESULT::default()
         }
