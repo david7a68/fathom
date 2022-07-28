@@ -11,7 +11,8 @@ use std::{
 
 use ash::vk;
 use windows::Win32::{
-    Foundation::{HINSTANCE, HWND, RECT},
+    Foundation::{HWND, RECT},
+    System::LibraryLoader::GetModuleHandleW,
     UI::WindowsAndMessaging::GetClientRect,
 };
 
@@ -279,7 +280,7 @@ impl RenderState {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct SwapchainHandle(Index);
 
 pub struct Renderer {
@@ -363,11 +364,9 @@ impl Renderer {
     }
 
     #[cfg(target_os = "windows")]
-    pub fn create_swapchain(
-        &mut self,
-        hwnd: HWND,
-        hinstance: HINSTANCE,
-    ) -> Result<SwapchainHandle, Error> {
+    pub fn create_swapchain(&mut self, hwnd: HWND) -> Result<SwapchainHandle, Error> {
+        let hinstance = unsafe { GetModuleHandleW(None) }.unwrap();
+
         let surface_ci = vk::Win32SurfaceCreateInfoKHR::builder()
             .hinstance(hinstance.0 as _)
             .hwnd(hwnd.0 as _);
@@ -386,9 +385,13 @@ impl Renderer {
             }
         };
 
-        let device =
-            self.device
-                .get_or_insert(init_device(&self.instance, &self.surface_api, surface)?);
+        let device = if let Some(device) = &self.device {
+            device
+        } else {
+            self.device = Some(init_device(&self.instance, &self.surface_api, surface)?);
+            self.device.as_ref().unwrap()
+        };
+
         let swapchain = Swapchain::new(device, surface, extent, &self.surface_api)?;
         let render_state = RenderState::new(device, &mut self.pipelines, &swapchain)?;
 

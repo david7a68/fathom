@@ -1,4 +1,5 @@
 mod color;
+mod event_loop;
 mod indexed_store;
 mod point;
 mod renderer;
@@ -6,33 +7,10 @@ mod renderer;
 use std::{cell::RefCell, rc::Rc};
 
 use color::Color;
+use event_loop::{ButtonState, EventLoopControl, MouseButton, WindowHandle, WindowEventHandler};
 use point::Point;
-use windows::{
-    core::PCWSTR,
-    Win32::{
-        Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
-        System::LibraryLoader::GetModuleHandleW,
-        UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
-            GetWindowLongPtrW, LoadCursorW, PeekMessageW, PostQuitMessage, RegisterClassExW,
-            SetWindowLongPtrW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-            GWLP_USERDATA, IDC_ARROW, MSG, PM_REMOVE, SW_SHOW, WINDOW_EX_STYLE, WM_DESTROY,
-            WM_ERASEBKGND, WM_PAINT, WM_QUIT, WM_WINDOWPOSCHANGED, WNDCLASSEXW,
-            WS_OVERLAPPEDWINDOW, WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-        },
-    },
-};
 
 use renderer::{Renderer, SwapchainHandle, Vertex};
-
-const WINDOW_TITLE: &str = "Hello!";
-
-/// The name of Fathom's window classes `"FATHOM_WNDCLASS"` in UTF-16 as an
-/// array of `u16`s.
-const WNDCLASS_NAME: &[u16] = &[
-    0x0046, 0x0041, 0x0054, 0x0048, 0x004f, 0x004d, 0x005f, 0x0057, 0x004e, 0x0044, 0x0043, 0x004c,
-    0x0041, 0x0053, 0x0053,
-];
 
 const TRIANGLE: [Vertex; 3] = [
     Vertex {
@@ -54,7 +32,10 @@ const TRIANGLE: [Vertex; 3] = [
         },
     },
     Vertex {
-        point: Point { x: -100.0, y: 100.0 },
+        point: Point {
+            x: -100.0,
+            y: 100.0,
+        },
         color: Color {
             r: 0.0,
             g: 0.0,
@@ -67,137 +48,43 @@ const TRIANGLE: [Vertex; 3] = [
 const INDICES: [u16; 6] = [0, 1, 2, 2, 3, 0];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let hinstance = unsafe { GetModuleHandleW(None)? };
-
-    let _wndclass_atom = {
-        let arrow_cursor = unsafe { LoadCursorW(None, &IDC_ARROW)? };
-
-        let wndclass = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>().try_into().unwrap(),
-            style: CS_VREDRAW | CS_HREDRAW,
-            hInstance: hinstance,
-            lpfnWndProc: Some(wndproc),
-            lpszClassName: PCWSTR(WNDCLASS_NAME.as_ptr()),
-            hCursor: arrow_cursor,
-            ..WNDCLASSEXW::default()
-        };
-
-        unsafe { RegisterClassExW(&wndclass) }
-    };
-
-    let hwnd = {
-        let os_title = {
-            use std::{ffi::OsStr, os::windows::prelude::OsStrExt};
-            let mut buffer: Vec<u16> = OsStr::new(WINDOW_TITLE).encode_wide().collect();
-            buffer.push(0);
-            buffer
-        };
-
-        unsafe {
-            CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                PCWSTR(WNDCLASS_NAME.as_ptr()),
-                PCWSTR(os_title.as_ptr()),
-                WS_OVERLAPPEDWINDOW,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                None,
-                None,
-                hinstance,
-                std::ptr::null_mut(),
-            )
-        }
-    };
-
     let renderer = Rc::new(RefCell::new(Renderer::new()?));
-    let swapchain = renderer.borrow_mut().create_swapchain(hwnd, hinstance)?;
 
-    let window = Box::new(Window {
-        hwnd,
-        renderer: renderer.clone(),
-        swapchain,
-    });
-
-    unsafe {
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::leak(window) as *const _ as _);
-        ShowWindow(hwnd, SW_SHOW);
-    }
-
-    'event_pump: loop {
-        let mut msg = MSG::default();
-        let ret = unsafe { GetMessageW(&mut msg, None, 0, 0).0 };
-        if ret == -1 {
-            panic!("GetMessage failed. Error: {:?}", unsafe { GetLastError() });
-        } else if ret == 0 {
-            break;
-        } else {
-            unsafe {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-        }
-
-        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.into() {
-            if msg.message == WM_QUIT {
-                break 'event_pump;
-            }
-
-            unsafe {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-        }
-    }
-
-    renderer.borrow_mut().destroy_swapchain(swapchain).unwrap();
+    let mut event_loop = event_loop::EventLoop::new();
+    event_loop.create_window(Box::new(Window::new(renderer)));
+    event_loop.run();
 
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum MouseButton {
-    Left,
-    Right,
-    Middle,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum ButtonState {
-    Down,
-    Up,
-}
-
 struct Window {
-    hwnd: HWND,
     swapchain: SwapchainHandle,
     renderer: Rc<RefCell<Renderer>>,
 }
 
 impl Window {
-    pub fn on_destroy(&mut self) {
+    fn new(renderer: Rc<RefCell<Renderer>>) -> Self {
+        Self {
+            swapchain: SwapchainHandle::default(),
+            renderer,
+        }
+    }
+}
+
+impl WindowEventHandler for Window {
+    fn on_create(&mut self, _control: &mut dyn EventLoopControl, window_handle: WindowHandle) {
+        let WindowHandle::Windows(hwnd) = window_handle;
+        self.swapchain = self.renderer.borrow_mut().create_swapchain(hwnd).unwrap();
+    }
+
+    fn on_destroy(&mut self, _control: &mut dyn EventLoopControl) {
         self.renderer
             .borrow_mut()
             .destroy_swapchain(self.swapchain)
             .unwrap();
     }
 
-    pub fn on_mouse_move(&mut self, new_x: i32, new_y: i32) {
-        println!("x: {}, y: {}", new_x, new_y);
-    }
-
-    pub fn on_mouse_button(&mut self, button: MouseButton, state: ButtonState) {
-        println!("button: {:?}, state: {:?}", button, state);
-    }
-
-    pub fn on_redraw(&mut self) {
-        let (width, height) = unsafe {
-            let mut rect = std::mem::zeroed();
-            GetClientRect(self.hwnd, &mut rect);
-            (rect.right - rect.left, rect.bottom - rect.top)
-        };
-
+    fn on_redraw(&mut self, _control: &mut dyn EventLoopControl, width: u32, height: u32) {
         if width > 0 && height > 0 {
             let mut renderer = self.renderer.borrow_mut();
             renderer.begin_frame(self.swapchain).unwrap();
@@ -206,62 +93,27 @@ impl Window {
                 .unwrap();
         }
     }
-}
 
-unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let window = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Window;
-
-    if window.is_null() {
-        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    fn on_mouse_move(&mut self, _control: &mut dyn EventLoopControl, new_x: i32, new_y: i32) {
+        println!("{} {}", new_x, new_y);
     }
 
-    if msg == WM_DESTROY {
-        let mut window = Box::from_raw(window);
-        window.on_destroy();
-        PostQuitMessage(0);
-        return LRESULT::default();
-    }
-
-    let window = &mut *window;
-
-    match msg {
-        WM_WINDOWPOSCHANGED => LRESULT::default(),
-        WM_ERASEBKGND => LRESULT(1),
-        WM_PAINT => {
-            window.on_redraw();
-            LRESULT::default()
+    fn on_mouse_button(
+        &mut self,
+        control: &mut dyn EventLoopControl,
+        button: MouseButton,
+        state: ButtonState,
+    ) {
+        match button {
+            MouseButton::Left => match state {
+                ButtonState::Down => {}
+                ButtonState::Up => {
+                    control.create_window(Box::new(Window::new(self.renderer.clone())));
+                }
+            },
+            MouseButton::Right => {}
+            MouseButton::Middle => {}
         }
-        WM_MOUSEMOVE => {
-            // cast to i16 preserves sign bit
-            let x = lparam.0 as i16 as i32;
-            let y = (lparam.0 >> 16) as i16 as i32;
-            window.on_mouse_move(x, y);
-            LRESULT::default()
-        }
-        WM_LBUTTONDOWN => {
-            window.on_mouse_button(MouseButton::Left, ButtonState::Down);
-            LRESULT::default()
-        }
-        WM_LBUTTONUP => {
-            window.on_mouse_button(MouseButton::Left, ButtonState::Up);
-            LRESULT::default()
-        }
-        WM_RBUTTONDOWN => {
-            window.on_mouse_button(MouseButton::Right, ButtonState::Down);
-            LRESULT::default()
-        }
-        WM_RBUTTONUP => {
-            window.on_mouse_button(MouseButton::Right, ButtonState::Up);
-            LRESULT::default()
-        }
-        WM_MBUTTONDOWN => {
-            window.on_mouse_button(MouseButton::Middle, ButtonState::Down);
-            LRESULT::default()
-        }
-        WM_MBUTTONUP => {
-            window.on_mouse_button(MouseButton::Middle, ButtonState::Up);
-            LRESULT::default()
-        }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        println!("{:?} {:?}", button, state);
     }
 }
