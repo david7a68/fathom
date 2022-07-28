@@ -405,7 +405,7 @@ impl Renderer {
     pub fn destroy_swapchain(&mut self, handle: SwapchainHandle) -> Result<(), Error> {
         if let Some((mut swapchain, mut state)) = self.swapchains.remove(handle.0) {
             let device = self.device.as_ref().unwrap();
-            swapchain.destroy_with(device, &self.surface_api).unwrap();
+            swapchain.destroy_with(device, &self.surface_api)?;
             state.destroy_with(device);
         }
         Ok(())
@@ -451,7 +451,7 @@ impl Renderer {
             swapchain.extent,
             render_state.geometry_buffers[frame_index].vertex_buffer,
             render_state.geometry_buffers[frame_index].index_buffer,
-            indices.len() as u16,
+            indices.len().try_into().map_err(|_| Error::IndexBufferTooLarge)?,
         )?;
 
         unsafe {

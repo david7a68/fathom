@@ -177,8 +177,8 @@ impl<T> Drop for IndexedStore<T> {
                 unsafe {
                     self.values
                         .get_unchecked_mut(index as usize)
-                        .assume_init_drop()
-                };
+                        .assume_init_drop();
+                }
             }
         }
     }

@@ -24,7 +24,11 @@ pub fn create(device: &ash::Device, swapchain_format: vk::Format) -> Result<Pipe
     let layout = {
         let push_constant_range = [vk::PushConstantRange::builder()
             .offset(0)
-            .size(std::mem::size_of::<PushConstants>() as u32)
+            .size(
+                std::mem::size_of::<PushConstants>()
+                    .try_into()
+                    .expect("push constants exceed 2^32 bytes; what happened?"),
+            )
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .build()];
 
@@ -279,7 +283,10 @@ pub fn record_draw(
             command_buffer,
             pipeline.layout,
             vk::ShaderStageFlags::VERTEX,
-            scale_bytes.len() as u32,
+            scale_bytes
+                .len()
+                .try_into()
+                .expect("scale push constaznt took up more than 2^32 bytes; overflow error?"),
             &translate_bytes,
         );
 

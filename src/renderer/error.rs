@@ -12,4 +12,6 @@ pub enum Error {
     Vulkan(#[from] vk::Result),
     #[error("too many objects")]
     TooManyObjects,
+    #[error("per-draw index buffer exceeds 2^16 indices")]
+    IndexBufferTooLarge
 }
