@@ -133,13 +133,13 @@ impl WindowEventHandler for Window {
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
         match button {
             MouseButton::Left => match state {
-                ButtonState::Down => {}
-                ButtonState::Up => {
+                ButtonState::Pressed => {}
+                ButtonState::Released => {
                     control.create_window(Box::new(Window::new(self.renderer.clone())));
                 }
             },
             MouseButton::Right => {
-                if state == ButtonState::Down {
+                if state == ButtonState::Pressed {
                     return Ok(EventReply::DestroyWindow);
                 }
             }

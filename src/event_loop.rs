@@ -36,8 +36,8 @@ pub enum MouseButton {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ButtonState {
-    Down,
-    Up,
+    Pressed,
+    Released,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -78,10 +78,7 @@ pub trait WindowEventHandler {
         control: &mut dyn Control,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
-    fn on_destroy(
-        &mut self,
-        control: &mut dyn Control,
-    ) -> Result<(), Box<dyn std::error::Error>>;
+    fn on_destroy(&mut self, control: &mut dyn Control) -> Result<(), Box<dyn std::error::Error>>;
 
     fn on_redraw(
         &mut self,
@@ -264,91 +261,67 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 
     let event_handler = &mut (*window).event_handler;
-    let event_loop = &mut (*window).event_loop;
+    let control = &mut (*window).event_loop;
 
-    match msg {
-        WM_CLOSE => {
-            handle_event_reply(hwnd, event_handler.on_close(event_loop));
-            LRESULT::default()
-        }
-        WM_DESTROY => {
-            if let Err(e) = event_handler.on_destroy(event_loop) {
-                println!("An error occurred while destroying a window: {}", e);
-            }
-
-            // If we only have two strong references, they must be window and
-            // the event loop that owns it. Since this is the last window, it is
-            // safe to exit the event loop.
-            if Rc::strong_count(event_loop) == 2 {
-                PostQuitMessage(0);
-            }
-
-            std::mem::drop(Box::from_raw(window));
-            LRESULT::default()
-        }
-        WM_WINDOWPOSCHANGED => LRESULT::default(),
-        WM_ERASEBKGND => LRESULT(1),
+    let reply = match msg {
+        WM_CLOSE => event_handler.on_close(control),
         WM_PAINT => {
             let (width, height) = {
                 let mut rect = std::mem::zeroed();
                 GetClientRect(hwnd, &mut rect);
                 (rect.right - rect.left, rect.bottom - rect.top)
             };
-            handle_event_reply(
-                hwnd,
-                event_handler.on_redraw(event_loop, width as u32, height as u32),
-            );
-            LRESULT::default()
+            event_handler.on_redraw(control, width as u32, height as u32)
         }
         WM_MOUSEMOVE => {
             // cast to i16 preserves sign bit
             let x = i32::from(lparam.0 as i16);
             let y = i32::from((lparam.0 >> 16) as i16);
-            handle_event_reply(hwnd, event_handler.on_mouse_move(event_loop, x, y));
-            LRESULT::default()
+            event_handler.on_mouse_move(control, x, y)
         }
         WM_LBUTTONDOWN => {
-            handle_event_reply(
-                hwnd,
-                event_handler.on_mouse_button(event_loop, MouseButton::Left, ButtonState::Down),
-            );
-            LRESULT::default()
+            event_handler.on_mouse_button(control, MouseButton::Left, ButtonState::Pressed)
         }
         WM_LBUTTONUP => {
-            handle_event_reply(
-                hwnd,
-                event_handler.on_mouse_button(event_loop, MouseButton::Left, ButtonState::Up),
-            );
-            LRESULT::default()
+            event_handler.on_mouse_button(control, MouseButton::Left, ButtonState::Released)
         }
         WM_RBUTTONDOWN => {
-            handle_event_reply(
-                hwnd,
-                event_handler.on_mouse_button(event_loop, MouseButton::Right, ButtonState::Down),
-            );
-            LRESULT::default()
+            event_handler.on_mouse_button(control, MouseButton::Right, ButtonState::Pressed)
         }
         WM_RBUTTONUP => {
-            handle_event_reply(
-                hwnd,
-                event_handler.on_mouse_button(event_loop, MouseButton::Right, ButtonState::Up),
-            );
-            LRESULT::default()
+            event_handler.on_mouse_button(control, MouseButton::Right, ButtonState::Released)
         }
         WM_MBUTTONDOWN => {
-            handle_event_reply(
-                hwnd,
-                event_handler.on_mouse_button(event_loop, MouseButton::Middle, ButtonState::Down),
-            );
-            LRESULT::default()
+            event_handler.on_mouse_button(control, MouseButton::Middle, ButtonState::Pressed)
         }
         WM_MBUTTONUP => {
-            handle_event_reply(
-                hwnd,
-                event_handler.on_mouse_button(event_loop, MouseButton::Middle, ButtonState::Up),
-            );
-            LRESULT::default()
+            event_handler.on_mouse_button(control, MouseButton::Middle, ButtonState::Released)
         }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-    }
+        special_return => {
+            return match special_return {
+                WM_DESTROY => {
+                    if let Err(e) = event_handler.on_destroy(control) {
+                        println!("An error occurred while destroying a window: {}", e);
+                    }
+
+                    std::mem::drop(Box::from_raw(window));
+
+                    // If we only have one strong reference, it must be owned by the
+                    // event loop and there are no more windows to source events from.
+                    // In this case, exit the event loop.
+                    if Rc::strong_count(control) == 1 {
+                        PostQuitMessage(0);
+                    }
+                    LRESULT(0)
+                }
+                WM_WINDOWPOSCHANGED => LRESULT(0),
+                WM_ERASEBKGND => LRESULT(1),
+                _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            };
+        }
+    };
+
+    handle_event_reply(hwnd, reply);
+
+    LRESULT(0)
 }
