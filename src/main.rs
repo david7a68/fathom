@@ -18,7 +18,7 @@ use windows::{
             SetWindowLongPtrW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
             GWLP_USERDATA, IDC_ARROW, MSG, PM_REMOVE, SW_SHOW, WINDOW_EX_STYLE, WM_DESTROY,
             WM_ERASEBKGND, WM_PAINT, WM_QUIT, WM_WINDOWPOSCHANGED, WNDCLASSEXW,
-            WS_OVERLAPPEDWINDOW,
+            WS_OVERLAPPEDWINDOW, WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
         },
     },
 };
@@ -156,6 +156,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ButtonState {
+    Down,
+    Up,
+}
+
 struct Window {
     hwnd: HWND,
     swapchain: SwapchainHandle,
@@ -168,6 +181,14 @@ impl Window {
             .borrow_mut()
             .destroy_swapchain(self.swapchain)
             .unwrap();
+    }
+
+    pub fn on_mouse_move(&mut self, new_x: i32, new_y: i32) {
+        println!("x: {}, y: {}", new_x, new_y);
+    }
+
+    pub fn on_mouse_button(&mut self, button: MouseButton, state: ButtonState) {
+        println!("button: {:?}, state: {:?}", button, state);
     }
 
     pub fn on_redraw(&mut self) {
@@ -208,6 +229,37 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             window.on_redraw();
+            LRESULT::default()
+        }
+        WM_MOUSEMOVE => {
+            // cast to i16 preserves sign bit
+            let x = lparam.0 as i16 as i32;
+            let y = (lparam.0 >> 16) as i16 as i32;
+            window.on_mouse_move(x, y);
+            LRESULT::default()
+        }
+        WM_LBUTTONDOWN => {
+            window.on_mouse_button(MouseButton::Left, ButtonState::Down);
+            LRESULT::default()
+        }
+        WM_LBUTTONUP => {
+            window.on_mouse_button(MouseButton::Left, ButtonState::Up);
+            LRESULT::default()
+        }
+        WM_RBUTTONDOWN => {
+            window.on_mouse_button(MouseButton::Right, ButtonState::Down);
+            LRESULT::default()
+        }
+        WM_RBUTTONUP => {
+            window.on_mouse_button(MouseButton::Right, ButtonState::Up);
+            LRESULT::default()
+        }
+        WM_MBUTTONDOWN => {
+            window.on_mouse_button(MouseButton::Middle, ButtonState::Down);
+            LRESULT::default()
+        }
+        WM_MBUTTONUP => {
+            window.on_mouse_button(MouseButton::Middle, ButtonState::Up);
             LRESULT::default()
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
