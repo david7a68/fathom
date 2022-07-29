@@ -175,6 +175,12 @@ impl Control for EventLoop {
     }
 }
 
+impl Default for EventLoop {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Drop for EventLoop {
     fn drop(&mut self) {
         assert!(
