@@ -473,7 +473,8 @@ impl Renderer {
             clear_color,
             render_state.geometry_buffers[frame_index].vertex_buffer,
             render_state.geometry_buffers[frame_index].index_buffer,
-            render_state.index_buffer
+            render_state
+                .index_buffer
                 .len()
                 .try_into()
                 .map_err(|_| Error::IndexBufferTooLarge)?,

@@ -37,10 +37,11 @@ pub enum MouseButton {
 }
 
 /// The state of a button such as a mouse button or keyboard key.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum ButtonState {
-    Pressed,
+    #[default]
     Released,
+    Pressed,
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -1,9 +1,9 @@
 /// The smallest unit of measurement in the UI. It has the same span as a 16-bit
 /// signed integer (`i16`).
-/// 
+///
 /// It is important to note that conversions from floats always round towards 0.
 #[repr(transparent)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Px(pub i16);
 
 impl From<Px> for f32 {
@@ -72,7 +72,7 @@ pub struct Extent {
 
 /// A 2D rectangle. All coordinates are in pixels and may be negative (outside
 /// the window).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rect {
     pub top: Px,
     pub left: Px,

@@ -13,5 +13,5 @@ pub enum Error {
     #[error("too many objects")]
     TooManyObjects,
     #[error("per-draw index buffer exceeds 2^16 indices")]
-    IndexBufferTooLarge
+    IndexBufferTooLarge,
 }

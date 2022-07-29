@@ -1,4 +1,4 @@
-use rand::{prelude::Distribution, distributions::Standard};
+use rand::{distributions::Standard, prelude::Distribution};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
