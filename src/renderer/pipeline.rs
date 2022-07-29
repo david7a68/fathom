@@ -273,7 +273,7 @@ pub fn record_draw(
             &scale_bytes,
         );
 
-        let translate = [-1.0 * scale[0], -1.0 * scale[1]];
+        let translate: [f32; 2] = [-1.0, -1.0];
 
         let mut translate_bytes = [0; 8];
         translate_bytes[0..4].copy_from_slice(&translate[0].to_ne_bytes());

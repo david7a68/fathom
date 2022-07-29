@@ -6,7 +6,7 @@ use fathom::{
         ButtonState, Control, EventLoop, EventReply, MouseButton, WindowEventHandler, WindowHandle,
     },
     point::Point,
-    renderer::{Renderer, SwapchainHandle, Vertex},
+    renderer::{Renderer, SwapchainHandle, Vertex}, shapes::{Rect},
 };
 
 const TRIANGLE: [Vertex; 3] = [
@@ -57,6 +57,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct Window {
     swapchain: SwapchainHandle,
     renderer: Rc<RefCell<Renderer>>,
+    width: u32,
+    height: u32,
 }
 
 impl Window {
@@ -64,6 +66,8 @@ impl Window {
         Self {
             swapchain: SwapchainHandle::default(),
             renderer,
+            width: 0,
+            height: 0,
         }
     }
 }
@@ -92,10 +96,39 @@ impl WindowEventHandler for Window {
         width: u32,
         height: u32,
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
+
+        if width != self.width || height != self.height {
+            self.width = width;
+            self.height = height;
+            println!("Resizing to {}x{}", width, height);
+        }
+
         if width > 0 && height > 0 {
             let mut renderer = self.renderer.borrow_mut();
             renderer.begin_frame(self.swapchain)?;
-            renderer.end_frame(self.swapchain, &TRIANGLE, &INDICES)?;
+
+            let mut vertex_buffer = Vec::new();
+            let mut index_buffer = Vec::new();
+
+            let rect = Rect {
+                top: 0.0,
+                left: 100.0,
+                bottom: 984.0,
+                right: 200.0,
+            };
+
+            rect.draw(
+                Color {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+                &mut vertex_buffer,
+                &mut index_buffer,
+            );
+
+            renderer.end_frame(self.swapchain, &vertex_buffer, &index_buffer)?;
         }
 
         Ok(EventReply::Continue)
@@ -124,7 +157,7 @@ impl WindowEventHandler for Window {
                 }
             },
             MouseButton::Right => {
-                if state == ButtonState::Pressed {
+                if state == ButtonState::Released {
                     return Ok(EventReply::DestroyWindow);
                 }
             }
