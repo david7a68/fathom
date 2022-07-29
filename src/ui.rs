@@ -5,6 +5,7 @@ use rand::Rng;
 use crate::{
     color::Color,
     indexed_store::{Index, IndexedStore},
+    point::Point,
     renderer::Vertex,
     shapes::Rect,
 };
@@ -21,6 +22,7 @@ impl From<Index> for PanelId {
 pub struct Context {
     width: u32,
     height: u32,
+    cursor_position: Option<Point>,
     background_color: Color,
     vertex_buffer: Vec<Vertex>,
     index_buffer: Vec<u16>,
@@ -51,6 +53,7 @@ impl Context {
         Self {
             width,
             height,
+            cursor_position: None,
             background_color,
             vertex_buffer: Vec::new(),
             index_buffer: Vec::new(),
@@ -80,6 +83,14 @@ impl Context {
     pub fn update_size(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
+    }
+
+    pub fn update_cursor(&mut self, position: Point) {
+        self.cursor_position = Some(position);
+    }
+
+    pub fn cursor(&self) -> Option<Point> {
+        self.cursor_position
     }
 
     pub fn root_panel(&self) -> PanelId {
@@ -141,6 +152,14 @@ impl Context {
         (first, second)
     }
 
+    pub fn panel_containing(&self, point: Point) -> PanelId {
+        smallest_panel_containing(&self.allocator, self.root_panel, point)
+    }
+
+    pub fn panel_mut(&mut self, id: PanelId) -> &mut Panel {
+        self.allocator.get_mut(id.0).unwrap()
+    }
+
     pub fn update(&mut self) {
         self.vertex_buffer.clear();
         self.index_buffer.clear();
@@ -169,13 +188,34 @@ trait Node {
 #[derive(Debug)]
 pub struct Panel {
     portion_of_parent: f32,
-    color: Color,
+    pub color: Color,
 
     next: PanelId,
     prev: PanelId,
 
     first_child: PanelId,
     cached_bounds: Cell<Rect>,
+}
+
+fn smallest_panel_containing(
+    panels: &IndexedStore<Panel>,
+    panel_idx: PanelId,
+    point: Point,
+) -> PanelId {
+    let panel = panels.get(panel_idx.0).unwrap();
+    assert!(panel.cached_bounds.get().contains(point));
+
+    let mut current = panel.first_child;
+    while current != PanelId::default() {
+        let panel = panels.get(current.0).unwrap();
+        if panel.cached_bounds.get().contains(point) {
+            return smallest_panel_containing(panels, current, point);
+        } else {
+            current = panel.next;
+        }
+    }
+
+    panel_idx
 }
 
 fn update_panels(
@@ -194,7 +234,7 @@ fn update_panels(
     parent_rect.draw(panel.color, vertex_buffer, index_buffer);
 
     let mut child_idx = panel.first_child;
-    
+
     while child_idx != PanelId::default() {
         let child = panels.get(child_idx.0).unwrap();
 
@@ -209,21 +249,5 @@ fn update_panels(
         update_panels(panels, vertex_buffer, index_buffer, child_idx, child_rect);
 
         child_idx = child.next;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn one() {
-        let mut context = Context::new(100, 100, Color::WHITE);
-        let (first, second) = context.split_panel(context.root_panel(), 0.5);
-        
-        println!("first: {:?}", context.allocator.get(first.0).unwrap());
-        println!("second: {:?}", context.allocator.get(second.0).unwrap());
-
-        context.update();
     }
 }

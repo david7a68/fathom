@@ -1,6 +1,6 @@
 use crate::{color::Color, point::Point, renderer::Vertex};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub top: f32,
     pub left: f32,
@@ -9,6 +9,13 @@ pub struct Rect {
 }
 
 impl Rect {
+    pub fn contains(&self, point: Point) -> bool {
+        self.left <= point.x
+            && point.x < self.right
+            && self.top <= point.y
+            && point.y <= self.bottom
+    }
+
     pub fn draw(&self, color: Color, vertex_buffer: &mut Vec<Vertex>, index_buffer: &mut Vec<u16>) {
         let offset = vertex_buffer.len() as u16;
 
