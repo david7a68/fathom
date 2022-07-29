@@ -1,18 +1,13 @@
-mod color;
-mod event_loop;
-mod indexed_store;
-mod point;
-mod renderer;
-
 use std::{cell::RefCell, rc::Rc};
 
-use color::Color;
-use event_loop::{
-    ButtonState, Control, EventReply, MouseButton, WindowEventHandler, WindowHandle,
+use fathom::{
+    color::Color,
+    event_loop::{
+        ButtonState, Control, EventLoop, EventReply, MouseButton, WindowEventHandler, WindowHandle,
+    },
+    point::Point,
+    renderer::{Renderer, SwapchainHandle, Vertex},
 };
-use point::Point;
-
-use renderer::{Renderer, SwapchainHandle, Vertex};
 
 const TRIANGLE: [Vertex; 3] = [
     Vertex {
@@ -52,7 +47,7 @@ const INDICES: [u16; 6] = [0, 1, 2, 2, 3, 0];
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let renderer = Rc::new(RefCell::new(Renderer::new()?));
 
-    let mut event_loop = event_loop::EventLoop::new();
+    let mut event_loop = EventLoop::new();
     event_loop.create_window(Box::new(Window::new(renderer)));
     event_loop.run();
 
@@ -91,10 +86,7 @@ impl WindowEventHandler for Window {
         Ok(EventReply::DestroyWindow)
     }
 
-    fn on_destroy(
-        &mut self,
-        _control: &mut dyn Control,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn on_destroy(&mut self, _control: &mut dyn Control) -> Result<(), Box<dyn std::error::Error>> {
         self.renderer
             .borrow_mut()
             .destroy_swapchain(self.swapchain)?;
