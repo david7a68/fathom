@@ -24,7 +24,7 @@ const WINDOW_TITLE: &str = "Hello!";
 /// array of `u16`s.
 const WNDCLASS_NAME: &[u16] = &[
     0x0046, 0x0041, 0x0054, 0x0048, 0x004f, 0x004d, 0x005f, 0x0057, 0x004e, 0x0044, 0x0043, 0x004c,
-    0x0041, 0x0053, 0x0053, 0,
+    0x0041, 0x0053, 0x0053, 0
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -34,6 +34,7 @@ pub enum MouseButton {
     Middle,
 }
 
+/// The state of a button such as a mouse button or keyboard key.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ButtonState {
     Pressed,
@@ -66,20 +67,71 @@ pub enum EventReply {
     DestroyWindow,
 }
 
+/// This trait defines the interface for a window event handler. It is
+/// effectively a set of callbacks with associated state.
+///
+/// This approach was chosen (2022-07-28) because it is the most flexible and
+/// offers good isolation between event handlers and the OS' windowing system
+/// whilst supporting a convenient way to associate state with each window. It
+/// also offers the ability to be polymorphic over the implementation of the
+/// event handler, greatly simplifying the event loop.
+///
+/// However, there are a couple tradeoffs to this approach:
+///
+///  - There is a likely cache miss every frame, since the event handler has
+///    likely been displaced by the time a new frame is needed by
+///    application-specific and rendering code. It should only be one miss,
+///    however, since input event handlers are likely to be relatively small
+///    relative to `on_redraw()`.
+///  - Allocating the trait object involves a heap allocation with its
+///    associated costs in time and space (fragmentation).
+///  - The amount of code required for a codebase with only one implementor of
+///    WindowEventHandler is likely similar to just using that implementor
+///    directly (at the cost of increased coupling).
 pub trait WindowEventHandler {
+    /// Handles initialization of any user state associated with the window.
+    ///
+    /// This method is called when the window is first created and isn't
+    /// visible.
+    ///
+    /// Return `EventReply::Continue` to continue creating the window, and
+    /// `EventReply::DestroyWindow` to abort. Returning an error will cause the
+    /// window to be immediately destroyed.
     fn on_create(
         &mut self,
         control: &mut dyn Control,
         window_handle: WindowHandle,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
+    /// Handles user-originating close requests, such as by clicking the 'X'
+    /// button on the window's titlebar or by pressing 'Alt+F4'.
+    ///
+    /// Return `EventReply::Continue` to ignore the request, or
+    /// `EventReply::DestroyWindow` to destroy the window. Returning an error
+    /// will cause the window to be immediately destroyed.
     fn on_close(
         &mut self,
         control: &mut dyn Control,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
+    /// Destroys any user state associated with the window. This is equivalent
+    /// to `Drop`ing the window.
+    ///
+    /// Called when the window is about to be destroyed. No other events will be
+    /// called on this window after this function, and the item implementing
+    /// this trait will be dropped once it returns.
+    ///
+    /// You can return `Err<Box<dyn Error>>` for convenience. It will not affect
+    /// window destruction, so make sure the window is in a good state to be
+    /// dropped.
     fn on_destroy(&mut self, control: &mut dyn Control) -> Result<(), Box<dyn std::error::Error>>;
 
+    /// Redraws the window's contents and presents it to the screen. This should
+    /// be called once per frame.
+    ///
+    /// Return `EventReply::Continue` to continue processing events (and keep
+    /// the window open), or `EventReply::DestroyWindow` to destroy the window
+    /// after the function returns.
     fn on_redraw(
         &mut self,
         control: &mut dyn Control,
@@ -87,6 +139,12 @@ pub trait WindowEventHandler {
         height: u32,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
+    /// Processes cursor movement accross the window. This may be called even
+    /// when the window is out of focus.
+    ///
+    /// Return `EventReply::Continue` to continue processing events (and keep
+    /// the window open), or `EventReply::DestroyWindow` to destroy the window
+    /// after the function returns.
     fn on_mouse_move(
         &mut self,
         control: &mut dyn Control,
@@ -94,6 +152,11 @@ pub trait WindowEventHandler {
         new_y: i32,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
+    /// Processes a mouse button press.
+    ///
+    /// Return `EventReply::Continue` to continue processing events (and keep
+    /// the window open), or `EventReply::DestroyWindow` to destroy the window
+    /// after the function returns.
     fn on_mouse_button(
         &mut self,
         control: &mut dyn Control,
@@ -102,20 +165,37 @@ pub trait WindowEventHandler {
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 }
 
+/// Expresses the interface for controlling window lifetimes outside of the
+/// event handler. This is used to permit a new window to be created whilst
+/// within an event handler.
 pub trait Control {
+    /// Creates a new window with the given event handler and associated state.
     fn create_window(&mut self, window: Box<dyn WindowEventHandler>);
 }
 
+/// Window-specific data that is associated with each window.
+///
+/// This is kept behind a `Box` to permit it to be associated with Windows'
+/// windows through the `SetWindowLongPtr()`/`GetWindowLongPtr()` API.
 struct WindowData {
+    /// A reference to data shared between every window. The refcount is used to
+    /// explicitly track the number of windows that are currently open. There
+    /// are no open windows if the refcount is 1, since one reference is
+    /// maintained by `EventLoop`.
     event_loop: Rc<RefCell<EventLoopInner>>,
+    /// A pointer to the window event handler.
     event_handler: Box<dyn WindowEventHandler>,
 }
 
+/// The event loop is responsible for querying window events from the OS and
+/// passing them to their corresponding `WindowEventHandler` implementations. It
+/// also handles creating new windows.
 pub struct EventLoop {
     inner: Rc<RefCell<EventLoopInner>>,
 }
 
 impl EventLoop {
+    /// Initializes the event loop.
     pub fn new() -> Self {
         let hinstance = unsafe { GetModuleHandleW(None) }.unwrap();
 
@@ -140,6 +220,7 @@ impl EventLoop {
         }
     }
 
+    /// Runs the event loop until there are no windows open.
     pub fn run(&mut self) {
         'event_pump: loop {
             let mut msg = MSG::default();
