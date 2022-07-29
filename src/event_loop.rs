@@ -114,18 +114,6 @@ pub trait WindowEventHandler {
         control: &mut dyn Control,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
-    /// Destroys any user state associated with the window. This is equivalent
-    /// to `Drop`ing the window.
-    ///
-    /// Called when the window is about to be destroyed. No other events will be
-    /// called on this window after this function, and the item implementing
-    /// this trait will be dropped once it returns.
-    ///
-    /// You can return `Err<Box<dyn Error>>` for convenience. It will not affect
-    /// window destruction, so make sure the window is in a good state to be
-    /// dropped.
-    fn on_destroy(&mut self, control: &mut dyn Control) -> Result<(), Box<dyn std::error::Error>>;
-
     /// Redraws the window's contents and presents it to the screen. This should
     /// be called once per frame.
     ///
@@ -392,10 +380,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         special_return => {
             return match special_return {
                 WM_DESTROY => {
-                    if let Err(e) = event_handler.on_destroy(control) {
-                        println!("An error occurred while destroying a window: {}", e);
-                    }
-
                     std::mem::drop(Box::from_raw(window));
 
                     // If we only have one strong reference, it must be owned by the

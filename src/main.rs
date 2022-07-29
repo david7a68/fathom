@@ -86,13 +86,6 @@ impl WindowEventHandler for Window {
         Ok(EventReply::DestroyWindow)
     }
 
-    fn on_destroy(&mut self, _control: &mut dyn Control) -> Result<(), Box<dyn std::error::Error>> {
-        self.renderer
-            .borrow_mut()
-            .destroy_swapchain(self.swapchain)?;
-        Ok(())
-    }
-
     fn on_redraw(
         &mut self,
         _control: &mut dyn Control,
@@ -138,5 +131,14 @@ impl WindowEventHandler for Window {
             MouseButton::Middle => {}
         }
         Ok(EventReply::Continue)
+    }
+}
+
+impl Drop for Window {
+    fn drop(&mut self) {
+        self.renderer
+            .borrow_mut()
+            .destroy_swapchain(self.swapchain)
+            .unwrap();
     }
 }
