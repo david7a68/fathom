@@ -2,6 +2,8 @@ use std::ffi::CStr;
 
 use ash::vk;
 
+use crate::color::Color;
+
 use super::{error::Error, vertex::Vertex};
 
 const SHADER_MAIN: *const i8 = b"main\0".as_ptr().cast();
@@ -195,6 +197,7 @@ pub fn record_draw(
     command_buffer: vk::CommandBuffer,
     frame_buffer: vk::Framebuffer,
     viewport: vk::Extent2D,
+    clear_color: Color,
     vertex_buffer: vk::Buffer,
     index_buffer: vk::Buffer,
     num_indices: u16,
@@ -217,7 +220,7 @@ pub fn record_draw(
                 })
                 .clear_values(&[vk::ClearValue {
                     color: vk::ClearColorValue {
-                        float32: [0.0, 0.0, 0.0, 1.0],
+                        float32: clear_color.to_array(),
                     },
                 }]),
             vk::SubpassContents::INLINE,
@@ -254,7 +257,7 @@ pub fn record_draw(
         vkdevice.cmd_bind_vertex_buffers(command_buffer, 0, &[vertex_buffer], &[0]);
         vkdevice.cmd_bind_index_buffer(command_buffer, index_buffer, 0, vk::IndexType::UINT16);
 
-        // normalize viewport width and viewport height to between -1 and 1
+        // normalize the vertices to [0, 1]
 
         let scale = [
             (2.0 / viewport.width as f32),

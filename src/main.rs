@@ -5,44 +5,8 @@ use fathom::{
     event_loop::{
         ButtonState, Control, EventLoop, EventReply, MouseButton, WindowEventHandler, WindowHandle,
     },
-    point::Point,
-    renderer::{Renderer, SwapchainHandle, Vertex}, shapes::{Rect},
+    renderer::{Renderer, SwapchainHandle, Vertex}, ui::Context,
 };
-
-const TRIANGLE: [Vertex; 3] = [
-    Vertex {
-        point: Point { x: 0.0, y: -100.0 },
-        color: Color {
-            r: 1.0,
-            g: 0.0,
-            b: 0.0,
-            a: 1.0,
-        },
-    },
-    Vertex {
-        point: Point { x: 100.0, y: 100.0 },
-        color: Color {
-            r: 0.0,
-            g: 1.0,
-            b: 0.0,
-            a: 1.0,
-        },
-    },
-    Vertex {
-        point: Point {
-            x: -100.0,
-            y: 100.0,
-        },
-        color: Color {
-            r: 0.0,
-            g: 0.0,
-            b: 1.0,
-            a: 1.0,
-        },
-    },
-];
-
-const INDICES: [u16; 6] = [0, 1, 2, 2, 3, 0];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let renderer = Rc::new(RefCell::new(Renderer::new()?));
@@ -57,8 +21,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct Window {
     swapchain: SwapchainHandle,
     renderer: Rc<RefCell<Renderer>>,
-    width: u32,
-    height: u32,
+    vertex_buffer: Vec<Vertex>,
+    index_buffer: Vec<u16>,
+    ui_context: Context,
+    do_once: bool,
 }
 
 impl Window {
@@ -66,8 +32,10 @@ impl Window {
         Self {
             swapchain: SwapchainHandle::default(),
             renderer,
-            width: 0,
-            height: 0,
+            vertex_buffer: Vec::new(),
+            index_buffer: Vec::new(),
+            ui_context: Context::new(0, 0, Color::BLUE),
+            do_once: false,
         }
     }
 }
@@ -96,39 +64,24 @@ impl WindowEventHandler for Window {
         width: u32,
         height: u32,
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
-
-        if width != self.width || height != self.height {
-            self.width = width;
-            self.height = height;
-            println!("Resizing to {}x{}", width, height);
-        }
-
         if width > 0 && height > 0 {
+            self.ui_context.update_size(width, height);
+
             let mut renderer = self.renderer.borrow_mut();
             renderer.begin_frame(self.swapchain)?;
 
-            let mut vertex_buffer = Vec::new();
-            let mut index_buffer = Vec::new();
+            let ui = &mut self.ui_context;
 
-            let rect = Rect {
-                top: 0.0,
-                left: 100.0,
-                bottom: 984.0,
-                right: 200.0,
-            };
+            if !self.do_once {
+                let root = ui.root_panel();
+                let (_left, _right) = ui.split_panel(root, 0.3);
 
-            rect.draw(
-                Color {
-                    r: 1.0,
-                    g: 0.0,
-                    b: 0.0,
-                    a: 1.0,
-                },
-                &mut vertex_buffer,
-                &mut index_buffer,
-            );
+                self.do_once = true;
+            }
 
-            renderer.end_frame(self.swapchain, &vertex_buffer, &index_buffer)?;
+            ui.update();
+
+            renderer.end_frame(self.swapchain, Color::BLACK, ui.vertex_buffer(), ui.index_buffer())?;
         }
 
         Ok(EventReply::Continue)

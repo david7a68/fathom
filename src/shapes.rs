@@ -10,6 +10,8 @@ pub struct Rect {
 
 impl Rect {
     pub fn draw(&self, color: Color, vertex_buffer: &mut Vec<Vertex>, index_buffer: &mut Vec<u16>) {
+        let offset = vertex_buffer.len() as u16;
+
         vertex_buffer.push(Vertex {
             point: Point {
                 x: self.left,
@@ -38,6 +40,14 @@ impl Rect {
             },
             color,
         });
-        index_buffer.extend_from_slice(&[0, 1, 2, 2, 3, 0]);
+
+        index_buffer.extend_from_slice(&[
+            offset,
+            offset + 1,
+            offset + 2,
+            offset + 2,
+            offset + 3,
+            offset,
+        ]);
     }
 }

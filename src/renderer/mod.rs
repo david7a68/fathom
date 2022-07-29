@@ -16,7 +16,7 @@ use windows::Win32::{
     UI::WindowsAndMessaging::GetClientRect,
 };
 
-use crate::indexed_store::{Index, IndexedStore};
+use crate::{indexed_store::{Index, IndexedStore}, color::Color};
 
 use self::{
     error::Error,
@@ -433,6 +433,7 @@ impl Renderer {
     pub fn end_frame(
         &mut self,
         handle: SwapchainHandle,
+        clear_color: Color,
         vertices: &[Vertex],
         indices: &[u16],
     ) -> Result<(), Error> {
@@ -449,6 +450,7 @@ impl Renderer {
             render_state.command_buffers[frame_index],
             render_state.frame_buffers[swapchain.current_image.unwrap() as usize],
             swapchain.extent,
+            clear_color,
             render_state.geometry_buffers[frame_index].vertex_buffer,
             render_state.geometry_buffers[frame_index].index_buffer,
             indices.len().try_into().map_err(|_| Error::IndexBufferTooLarge)?,

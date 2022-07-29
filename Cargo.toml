@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ash = { version = "0.37.0", features = ["libloading"] }
+rand = "0.8"
 thiserror = "1.0"
 
 [dependencies.windows]

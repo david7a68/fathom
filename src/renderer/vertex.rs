@@ -3,7 +3,7 @@ use ash::vk;
 use crate::{color::Color, point::Point};
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Vertex {
     pub point: Point,
     pub color: Color,
