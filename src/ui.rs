@@ -155,7 +155,6 @@ impl Context {
 
         update_panels(
             &self.allocator,
-            &mut self.draw_commands,
             self.root_panel,
             Rect {
                 top: Px(0),
@@ -164,13 +163,9 @@ impl Context {
                 right: self.window_size.width,
             },
         );
+
+        draw_panels(&self.allocator, &mut self.draw_commands, self.root_panel);
     }
-}
-
-trait Node {
-    fn layout(&self, context: &mut Context, parent_rect: Rect);
-
-    fn draw(&self, context: &mut Context);
 }
 
 #[derive(Debug)]
@@ -206,19 +201,12 @@ fn smallest_panel_containing(
     panel_idx
 }
 
-fn update_panels(
-    panels: &IndexedStore<Panel>,
-    command_buffer: &mut Vec<DrawCommand>,
-    panel_idx: PanelId,
-    parent_rect: Rect,
-) {
+fn update_panels(panels: &IndexedStore<Panel>, panel_idx: PanelId, parent_rect: Rect) {
     let panel = panels.get(panel_idx.0).unwrap();
     panel.cached_bounds.set(parent_rect);
 
     let width = parent_rect.right - parent_rect.left;
     let mut offset = parent_rect.left;
-
-    command_buffer.push(DrawCommand::Rect(parent_rect, panel.color));
 
     let mut child_idx = panel.first_child;
 
@@ -233,8 +221,22 @@ fn update_panels(
         offset = child_rect.right;
         child.cached_bounds.set(child_rect);
 
-        update_panels(panels, command_buffer, child_idx, child_rect);
+        child_idx = child.next;
+    }
+}
 
+fn draw_panels(
+    panels: &IndexedStore<Panel>,
+    command_buffer: &mut Vec<DrawCommand>,
+    panel_idx: PanelId,
+) {
+    let panel = panels.get(panel_idx.0).unwrap();
+    command_buffer.push(DrawCommand::Rect(panel.cached_bounds.get(), panel.color));
+
+    let mut child_idx = panel.first_child;
+    while child_idx != PanelId::default() {
+        let child = panels.get(child_idx.0).unwrap();
+        draw_panels(panels, command_buffer, child_idx);
         child_idx = child.next;
     }
 }
