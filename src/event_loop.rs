@@ -143,6 +143,11 @@ impl EventLoop {
     pub fn run(&mut self) {
         'event_pump: loop {
             let mut msg = MSG::default();
+
+            if Rc::strong_count(&self.inner) == 1 {
+                break 'event_pump;
+            }
+
             let ret = unsafe { GetMessageW(&mut msg, None, 0, 0).0 };
             if ret == -1 {
                 panic!("GetMessage failed. Error: {:?}", unsafe { GetLastError() });
