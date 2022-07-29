@@ -18,13 +18,15 @@ use windows::{
     },
 };
 
+use crate::geometry::{Extent, Point, Px};
+
 const WINDOW_TITLE: &str = "Hello!";
 
 /// The name of Fathom's window classes `"FATHOM_WNDCLASS"` in UTF-16 as an
 /// array of `u16`s.
 const WNDCLASS_NAME: &[u16] = &[
     0x0046, 0x0041, 0x0054, 0x0048, 0x004f, 0x004d, 0x005f, 0x0057, 0x004e, 0x0044, 0x0043, 0x004c,
-    0x0041, 0x0053, 0x0053, 0
+    0x0041, 0x0053, 0x0053, 0,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -123,8 +125,7 @@ pub trait WindowEventHandler {
     fn on_redraw(
         &mut self,
         control: &mut dyn Control,
-        width: u32,
-        height: u32,
+        window_size: Extent,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
     /// Processes cursor movement accross the window. This may be called even
@@ -136,8 +137,7 @@ pub trait WindowEventHandler {
     fn on_mouse_move(
         &mut self,
         control: &mut dyn Control,
-        new_x: i32,
-        new_y: i32,
+        new_position: Point,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
     /// Processes a mouse button press.
@@ -351,13 +351,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 GetClientRect(hwnd, &mut rect);
                 (rect.right - rect.left, rect.bottom - rect.top)
             };
-            event_handler.on_redraw(control, width as u32, height as u32)
+            event_handler.on_redraw(
+                control,
+                Extent {
+                    width: width.try_into().unwrap(),
+                    height: height.try_into().unwrap(),
+                },
+            )
         }
         WM_MOUSEMOVE => {
             // cast to i16 preserves sign bit
-            let x = i32::from(lparam.0 as i16);
-            let y = i32::from((lparam.0 >> 16) as i16);
-            event_handler.on_mouse_move(control, x, y)
+            let x = lparam.0 as i16;
+            let y = (lparam.0 >> 16) as i16;
+            event_handler.on_mouse_move(control, Point { x: Px(x), y: Px(y) })
         }
         WM_LBUTTONDOWN => {
             event_handler.on_mouse_button(control, MouseButton::Left, ButtonState::Pressed)

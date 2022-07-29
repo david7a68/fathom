@@ -1,11 +1,11 @@
 use ash::vk;
 
-use crate::{color::Color, draw_command::DrawCommand, point::Point};
+use crate::{color::Color, draw_command::DrawCommand, geometry::Point};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Vertex {
-    pub point: Point,
+    pub point: (f32, f32),
     pub color: Color,
 }
 
@@ -44,31 +44,19 @@ pub fn commands_to_vertices(
                 let offset = vertex_buffer.len() as u16;
 
                 vertex_buffer.push(Vertex {
-                    point: Point {
-                        x: rect.left,
-                        y: rect.top,
-                    },
+                    point: (rect.left.into(), rect.top.into()),
                     color: *color,
                 });
                 vertex_buffer.push(Vertex {
-                    point: Point {
-                        x: rect.right,
-                        y: rect.top,
-                    },
+                    point: (rect.right.into(), rect.top.into()),
                     color: *color,
                 });
                 vertex_buffer.push(Vertex {
-                    point: Point {
-                        x: rect.right,
-                        y: rect.bottom,
-                    },
+                    point: (rect.right.into(), rect.bottom.into()),
                     color: *color,
                 });
                 vertex_buffer.push(Vertex {
-                    point: Point {
-                        x: rect.left,
-                        y: rect.bottom,
-                    },
+                    point: (rect.left.into(), rect.bottom.into()),
                     color: *color,
                 });
 

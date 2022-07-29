@@ -5,7 +5,7 @@ use fathom::{
     event_loop::{
         ButtonState, Control, EventLoop, EventReply, MouseButton, WindowEventHandler, WindowHandle,
     },
-    point::Point,
+    geometry::{Extent, Point, Px},
     renderer::{Renderer, SwapchainHandle},
     ui::Context,
 };
@@ -33,7 +33,13 @@ impl Window {
         Self {
             swapchain: SwapchainHandle::default(),
             renderer,
-            ui_context: Context::new(0, 0, Color::BLUE),
+            ui_context: Context::new(
+                Extent {
+                    width: Px(0),
+                    height: Px(0),
+                },
+                Color::BLUE,
+            ),
             do_once: false,
         }
     }
@@ -60,11 +66,10 @@ impl WindowEventHandler for Window {
     fn on_redraw(
         &mut self,
         _control: &mut dyn Control,
-        width: u32,
-        height: u32,
+        window_size: Extent,
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
-        if width > 0 && height > 0 {
-            self.ui_context.update_size(width, height);
+        if window_size.width > Px(0) && window_size.height > Px(0) {
+            self.ui_context.update_size(window_size);
 
             let mut renderer = self.renderer.borrow_mut();
             renderer.begin_frame(self.swapchain)?;
@@ -80,11 +85,7 @@ impl WindowEventHandler for Window {
 
             ui.update();
 
-            renderer.end_frame(
-                self.swapchain,
-                Color::BLACK,
-                ui.draw_commands(),
-            )?;
+            renderer.end_frame(self.swapchain, Color::BLACK, ui.draw_commands())?;
         }
 
         Ok(EventReply::Continue)
@@ -93,13 +94,9 @@ impl WindowEventHandler for Window {
     fn on_mouse_move(
         &mut self,
         _control: &mut dyn Control,
-        new_x: i32,
-        new_y: i32,
+        new_position: Point,
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
-        self.ui_context.update_cursor(Point {
-            x: new_x as f32,
-            y: new_y as f32,
-        });
+        self.ui_context.update_cursor(new_position);
         Ok(EventReply::Continue)
     }
 

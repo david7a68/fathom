@@ -1,4 +1,4 @@
-use crate::{shapes::Rect, color::Color};
+use crate::{geometry::Rect, color::Color};
 
 pub enum DrawCommand {
     Rect(Rect, Color),

@@ -5,9 +5,8 @@ use rand::Rng;
 use crate::{
     color::Color,
     draw_command::DrawCommand,
+    geometry::{Extent, Point, Px, Rect},
     indexed_store::{Index, IndexedStore},
-    point::Point,
-    shapes::Rect,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -20,8 +19,7 @@ impl From<Index> for PanelId {
 }
 
 pub struct Context {
-    width: u32,
-    height: u32,
+    window_size: Extent,
     cursor_position: Option<Point>,
     background_color: Color,
     draw_commands: Vec<DrawCommand>,
@@ -30,7 +28,7 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(width: u32, height: u32, background_color: Color) -> Self {
+    pub fn new(window_size: Extent, background_color: Color) -> Self {
         let mut allocator = IndexedStore::new();
 
         let root_panel = allocator
@@ -41,17 +39,16 @@ impl Context {
                 prev: PanelId::default(),
                 first_child: PanelId::default(),
                 cached_bounds: Cell::new(Rect {
-                    top: 0.0,
-                    left: 0.0,
-                    bottom: height as f32,
-                    right: width as f32,
+                    top: Px(0),
+                    left: Px(0),
+                    bottom: window_size.height,
+                    right: window_size.width,
                 }),
             })
             .unwrap();
 
         Self {
-            width,
-            height,
+            window_size,
             cursor_position: None,
             background_color,
             draw_commands: Vec::new(),
@@ -74,9 +71,8 @@ impl Context {
         &self.draw_commands
     }
 
-    pub fn update_size(&mut self, width: u32, height: u32) {
-        self.width = width;
-        self.height = height;
+    pub fn update_size(&mut self, extent: Extent) {
+        self.window_size = extent;
     }
 
     pub fn update_cursor(&mut self, position: Point) {
@@ -162,10 +158,10 @@ impl Context {
             &mut self.draw_commands,
             self.root_panel,
             Rect {
-                top: 0.0,
-                left: 0.0,
-                bottom: self.height as f32,
-                right: self.width as f32,
+                top: Px(0),
+                left: Px(0),
+                bottom: self.window_size.height,
+                right: self.window_size.width,
             },
         );
     }
