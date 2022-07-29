@@ -16,11 +16,16 @@ use windows::Win32::{
     UI::WindowsAndMessaging::GetClientRect,
 };
 
-use crate::{indexed_store::{Index, IndexedStore}, color::Color};
+use crate::{
+    color::Color,
+    draw_command::DrawCommand,
+    indexed_store::{Index, IndexedStore},
+};
 
 use self::{
     error::Error,
     swapchain::{Swapchain, FRAMES_IN_FLIGHT},
+    vertex::commands_to_vertices,
 };
 
 pub use vertex::Vertex;
@@ -161,6 +166,8 @@ struct RenderState {
     command_buffers: [vk::CommandBuffer; FRAMES_IN_FLIGHT as usize],
     geometry_buffers: [GeometryBuffer; FRAMES_IN_FLIGHT as usize],
     frame_buffers: Vec<vk::Framebuffer>,
+    vertex_buffer: Vec<Vertex>,
+    index_buffer: Vec<u16>,
 }
 
 impl RenderState {
@@ -224,6 +231,8 @@ impl RenderState {
             command_buffers,
             frame_buffers,
             geometry_buffers: [GeometryBuffer::default(), GeometryBuffer::default()],
+            vertex_buffer: Vec::new(),
+            index_buffer: Vec::new(),
         })
     }
 
@@ -434,15 +443,26 @@ impl Renderer {
         &mut self,
         handle: SwapchainHandle,
         clear_color: Color,
-        vertices: &[Vertex],
-        indices: &[u16],
+        draw_commands: &[DrawCommand],
     ) -> Result<(), Error> {
         let device = self.device.as_ref().unwrap();
         let (swapchain, render_state) = self.swapchains.get_mut(handle.0).unwrap();
 
         let (frame_index, frame_objects) = swapchain.frame_objects();
 
-        render_state.geometry_buffers[frame_index].upload_to_gpu(device, vertices, indices)?;
+        render_state.vertex_buffer.clear();
+        render_state.index_buffer.clear();
+        commands_to_vertices(
+            draw_commands,
+            &mut render_state.vertex_buffer,
+            &mut render_state.index_buffer,
+        );
+
+        render_state.geometry_buffers[frame_index].upload_to_gpu(
+            device,
+            &render_state.vertex_buffer,
+            &render_state.index_buffer,
+        )?;
 
         let command_buffer = pipeline::record_draw(
             &device.device,
@@ -453,7 +473,10 @@ impl Renderer {
             clear_color,
             render_state.geometry_buffers[frame_index].vertex_buffer,
             render_state.geometry_buffers[frame_index].index_buffer,
-            indices.len().try_into().map_err(|_| Error::IndexBufferTooLarge)?,
+            render_state.index_buffer
+                .len()
+                .try_into()
+                .map_err(|_| Error::IndexBufferTooLarge)?,
         )?;
 
         unsafe {

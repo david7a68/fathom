@@ -1,6 +1,6 @@
 use ash::vk;
 
-use crate::{color::Color, point::Point};
+use crate::{color::Color, draw_command::DrawCommand, point::Point};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -31,4 +31,56 @@ impl Vertex {
             offset: std::mem::size_of::<Point>() as u32,
         },
     ];
+}
+
+pub fn commands_to_vertices(
+    commands: &[DrawCommand],
+    vertex_buffer: &mut Vec<Vertex>,
+    index_buffer: &mut Vec<u16>,
+) {
+    for command in commands {
+        match command {
+            DrawCommand::Rect(rect, color) => {
+                let offset = vertex_buffer.len() as u16;
+
+                vertex_buffer.push(Vertex {
+                    point: Point {
+                        x: rect.left,
+                        y: rect.top,
+                    },
+                    color: *color,
+                });
+                vertex_buffer.push(Vertex {
+                    point: Point {
+                        x: rect.right,
+                        y: rect.top,
+                    },
+                    color: *color,
+                });
+                vertex_buffer.push(Vertex {
+                    point: Point {
+                        x: rect.right,
+                        y: rect.bottom,
+                    },
+                    color: *color,
+                });
+                vertex_buffer.push(Vertex {
+                    point: Point {
+                        x: rect.left,
+                        y: rect.bottom,
+                    },
+                    color: *color,
+                });
+
+                index_buffer.extend_from_slice(&[
+                    offset,
+                    offset + 1,
+                    offset + 2,
+                    offset + 2,
+                    offset + 3,
+                    offset,
+                ]);
+            }
+        }
+    }
 }

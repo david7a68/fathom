@@ -4,9 +4,9 @@ use rand::Rng;
 
 use crate::{
     color::Color,
+    draw_command::DrawCommand,
     indexed_store::{Index, IndexedStore},
     point::Point,
-    renderer::Vertex,
     shapes::Rect,
 };
 
@@ -24,8 +24,7 @@ pub struct Context {
     height: u32,
     cursor_position: Option<Point>,
     background_color: Color,
-    vertex_buffer: Vec<Vertex>,
-    index_buffer: Vec<u16>,
+    draw_commands: Vec<DrawCommand>,
     allocator: IndexedStore<Panel>,
     root_panel: PanelId,
 }
@@ -55,8 +54,7 @@ impl Context {
             height,
             cursor_position: None,
             background_color,
-            vertex_buffer: Vec::new(),
-            index_buffer: Vec::new(),
+            draw_commands: Vec::new(),
             allocator,
             root_panel: PanelId(root_panel),
         }
@@ -72,12 +70,8 @@ impl Context {
         old_color
     }
 
-    pub fn vertex_buffer(&self) -> &Vec<Vertex> {
-        &self.vertex_buffer
-    }
-
-    pub fn index_buffer(&self) -> &Vec<u16> {
-        &self.index_buffer
+    pub fn draw_commands(&self) -> &Vec<DrawCommand> {
+        &self.draw_commands
     }
 
     pub fn update_size(&mut self, width: u32, height: u32) {
@@ -161,13 +155,11 @@ impl Context {
     }
 
     pub fn update(&mut self) {
-        self.vertex_buffer.clear();
-        self.index_buffer.clear();
+        self.draw_commands.clear();
 
         update_panels(
             &self.allocator,
-            &mut self.vertex_buffer,
-            &mut self.index_buffer,
+            &mut self.draw_commands,
             self.root_panel,
             Rect {
                 top: 0.0,
@@ -220,8 +212,7 @@ fn smallest_panel_containing(
 
 fn update_panels(
     panels: &IndexedStore<Panel>,
-    vertex_buffer: &mut Vec<Vertex>,
-    index_buffer: &mut Vec<u16>,
+    command_buffer: &mut Vec<DrawCommand>,
     panel_idx: PanelId,
     parent_rect: Rect,
 ) {
@@ -231,7 +222,7 @@ fn update_panels(
     let width = parent_rect.right - parent_rect.left;
     let mut offset = parent_rect.left;
 
-    parent_rect.draw(panel.color, vertex_buffer, index_buffer);
+    command_buffer.push(DrawCommand::Rect(parent_rect, panel.color));
 
     let mut child_idx = panel.first_child;
 
@@ -246,7 +237,7 @@ fn update_panels(
         offset = child_rect.right;
         child.cached_bounds.set(child_rect);
 
-        update_panels(panels, vertex_buffer, index_buffer, child_idx, child_rect);
+        update_panels(panels, command_buffer, child_idx, child_rect);
 
         child_idx = child.next;
     }

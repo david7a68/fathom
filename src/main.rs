@@ -83,8 +83,7 @@ impl WindowEventHandler for Window {
             renderer.end_frame(
                 self.swapchain,
                 Color::BLACK,
-                ui.vertex_buffer(),
-                ui.index_buffer(),
+                ui.draw_commands(),
             )?;
         }
 
