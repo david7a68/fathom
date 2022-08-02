@@ -7,7 +7,7 @@ use fathom::{
     },
     geometry::{Extent, Point, Px},
     renderer::{Renderer, SwapchainHandle},
-    ui::Context,
+    ui::{ColorFill, Context},
 };
 use rand::random;
 
@@ -77,8 +77,24 @@ impl WindowEventHandler for Window {
             let ui = &mut self.ui_context;
 
             if !self.do_once {
-                let root = ui.root_panel();
-                let (_left, _right) = ui.split_panel(root, 0.3);
+                // ui.set_root(Box::new(XSplitPanel {
+                //     panes: vec![
+                //         (
+                //             0.3,
+                //             XSplitPane {
+                //                 body: Box::new(ColorFill(Color::RED)),
+                //             },
+                //         ),
+                //         (
+                //             0.7,
+                //             XSplitPane {
+                //                 body: Box::new(ColorFill(Color::GREEN)),
+                //             },
+                //         ),
+                //     ],
+                // }));
+
+                ui.set_root(Box::new(ColorFill(Color::RED)));
 
                 self.do_once = true;
             }
@@ -108,13 +124,7 @@ impl WindowEventHandler for Window {
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
         match button {
             MouseButton::Left => match state {
-                ButtonState::Pressed => {
-                    let panel_id = self
-                        .ui_context
-                        .panel_containing(self.ui_context.cursor().unwrap());
-                    let panel = self.ui_context.panel_mut(panel_id);
-                    panel.color = random();
-                }
+                ButtonState::Pressed => {}
                 ButtonState::Released => {
                     // control.create_window(Box::new(Window::new(self.renderer.clone())));
                 }

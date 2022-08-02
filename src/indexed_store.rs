@@ -1,8 +1,8 @@
 use std::mem::MaybeUninit;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Index {
-    index: u32,
+    pub index: u32,
     generation: u32,
 }
 
@@ -16,7 +16,7 @@ impl Index {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum StoreError {
+pub enum Error {
     #[error("the store has run out of concurrent indices (max u32::MAX)")]
     OutOfIndices,
 }
@@ -35,6 +35,7 @@ pub enum StoreError {
 /// reserved for a `null` value.
 /// - The current implementation is not thread-safe and does not guarantee fixed
 ///   pointers for values.
+#[derive(Debug)]
 pub struct IndexedStore<T> {
     free_indices: Vec<u32>,
     generations: Vec<u32>,
@@ -72,7 +73,7 @@ impl<T> IndexedStore<T> {
     }
 
     /// Inserts a new value into the store.
-    pub fn insert(&mut self, value: T) -> Result<Index, StoreError> {
+    pub fn insert(&mut self, value: T) -> Result<Index, Error> {
         self.validate_invariants();
 
         if self.values.is_empty() {
@@ -95,7 +96,7 @@ impl<T> IndexedStore<T> {
                 .values
                 .len()
                 .try_into()
-                .map_err(|_| StoreError::OutOfIndices)?;
+                .map_err(|_| Error::OutOfIndices)?;
 
             self.values.push(MaybeUninit::new(value));
             self.generations.push(0);
