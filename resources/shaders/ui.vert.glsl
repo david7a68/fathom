@@ -1,6 +1,6 @@
 #version 450
 
-layout(location = 0) in vec2 position;
+layout(location = 0) in ivec2 position;
 layout(location = 1) in vec4 color;
 
 layout(push_constant) uniform PushConstants {

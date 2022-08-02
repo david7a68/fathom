@@ -38,6 +38,12 @@ impl std::ops::Add for Px {
     }
 }
 
+impl std::ops::AddAssign for Px {
+    fn add_assign(&mut self, other: Self) {
+        self.0 += other.0;
+    }
+}
+
 impl std::ops::Sub for Px {
     type Output = Px;
     fn sub(self, other: Px) -> Self::Output {
@@ -56,7 +62,7 @@ impl std::ops::Mul<f32> for Px {
 /// corner of the window) if the cursor has been captured and has left the
 /// window.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Point {
     pub x: Px,
     pub y: Px,
@@ -64,7 +70,7 @@ pub struct Point {
 
 /// The size of a 2D rectangle. It is never negative.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Extent {
     pub width: Px,
     pub height: Px,
@@ -81,6 +87,54 @@ pub struct Rect {
 }
 
 impl Rect {
+    pub fn new(point: Point, extent: Extent) -> Self {
+        Rect {
+            top: point.y,
+            left: point.x,
+            bottom: point.y + extent.height,
+            right: point.x + extent.width,
+        }
+    }
+
+    pub fn top_left(&self) -> Point {
+        Point {
+            x: self.left,
+            y: self.top,
+        }
+    }
+
+    pub fn top_right(&self) -> Point {
+        Point {
+            x: self.right,
+            y: self.top,
+        }
+    }
+
+    pub fn bottom_left(&self) -> Point {
+        Point {
+            x: self.left,
+            y: self.bottom,
+        }
+    }
+
+    pub fn bottom_right(&self) -> Point {
+        Point {
+            x: self.right,
+            y: self.bottom,
+        }
+    }
+
+    pub fn width(&self) -> Px {
+        self.right - self.left
+    }
+
+    pub fn extent(&self) -> Extent {
+        Extent {
+            width: self.width(),
+            height: self.bottom - self.top,
+        }
+    }
+
     pub fn contains(&self, point: Point) -> bool {
         self.left <= point.x
             && point.x < self.right

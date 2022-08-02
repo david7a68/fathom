@@ -5,7 +5,7 @@ use crate::{color::Color, draw_command::DrawCommand, geometry::Point};
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Vertex {
-    pub point: (f32, f32),
+    pub point: Point,
     pub color: Color,
 }
 
@@ -21,7 +21,7 @@ impl Vertex {
         vk::VertexInputAttributeDescription {
             location: 0,
             binding: 0,
-            format: vk::Format::R32G32_SFLOAT,
+            format: vk::Format::R16G16_SINT,
             offset: 0,
         },
         vk::VertexInputAttributeDescription {
@@ -44,19 +44,19 @@ pub fn commands_to_vertices(
                 let offset = vertex_buffer.len() as u16;
 
                 vertex_buffer.push(Vertex {
-                    point: (rect.left.into(), rect.top.into()),
+                    point: rect.top_left(),
                     color: *color,
                 });
                 vertex_buffer.push(Vertex {
-                    point: (rect.right.into(), rect.top.into()),
+                    point: rect.top_right(),
                     color: *color,
                 });
                 vertex_buffer.push(Vertex {
-                    point: (rect.right.into(), rect.bottom.into()),
+                    point: rect.bottom_right(),
                     color: *color,
                 });
                 vertex_buffer.push(Vertex {
-                    point: (rect.left.into(), rect.bottom.into()),
+                    point: rect.bottom_left(),
                     color: *color,
                 });
 
