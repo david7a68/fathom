@@ -1,4 +1,3 @@
-
 use crate::geometry::{Extent, Point, Px};
 
 use std::{cell::RefCell, rc::Rc};
@@ -9,18 +8,20 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-            GetMessageW, GetWindowLongPtrW, LoadCursorW, PeekMessageW, PostQuitMessage,
-            RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW,
-            CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, PM_REMOVE,
-            SW_SHOW, WINDOW_EX_STYLE, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
+            GetMessageW, GetWindowLongPtrW, LoadCursorW, PeekMessageW, PostMessageW,
+            PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage,
+            CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG,
+            PM_REMOVE, SW_SHOW, WINDOW_EX_STYLE, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
             WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
-            WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_WINDOWPOSCHANGED, WNDCLASSEXW,
+            WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER, WM_WINDOWPOSCHANGED, WNDCLASSEXW,
             WS_OVERLAPPEDWINDOW,
         },
     },
 };
 
 const WINDOW_TITLE: &str = "Hello!";
+
+const UM_DESTROY_WINDOW: u32 = WM_USER + 1;
 
 /// The name of Fathom's window classes `"FATHOM_WNDCLASS"` in UTF-16 as an
 /// array of `u16`s.
@@ -45,29 +46,13 @@ pub enum ButtonState {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum WindowHandle {
-    Windows(HWND),
-}
+pub struct WindowHandle(HWND);
 
-/// Deferred control of a window event loop. Use this to modify the lifetime of
-/// the window.
-///
-/// IMPL(straivers, 2022-07-28): This design was adopted in order to permit
-/// windows to be destroyed within their event handlers without introducing
-/// re-entrancy. That is to say, calling `event_loop.destroy_window()` in an
-/// event handler would prompt a call to `WindowEventHandler::on_destroy()`
-/// whilst still within a different event handler. This is not possible with the
-/// current design.
-#[must_use]
-#[derive(Default, Debug)]
-pub enum EventReply {
-    /// Continue processing the event loop. The window will remain open and
-    /// accepting input.
-    #[default]
-    Continue,
-    /// Destroy the window after the event handler returns. This will prompt a
-    /// call to `WindowEventHandler::on_destroy()`.
-    DestroyWindow,
+impl WindowHandle {
+    #[cfg(target_os = "windows")]
+    pub fn raw(&self) -> HWND {
+        self.0
+    }
 }
 
 /// This trait defines the interface for a window event handler. It is
@@ -100,11 +85,7 @@ pub trait WindowEventHandler {
     /// Return `EventReply::Continue` to continue creating the window, and
     /// `EventReply::DestroyWindow` to abort. Returning an error will cause the
     /// window to be immediately destroyed.
-    fn on_create(
-        &mut self,
-        control: &mut dyn Proxy,
-        window_handle: WindowHandle,
-    ) -> Result<EventReply, Box<dyn std::error::Error>>;
+    fn on_create(&mut self, window_handle: WindowHandle, control: &mut dyn Proxy);
 
     /// Handles user-originating close requests, such as by clicking the 'X'
     /// button on the window's titlebar or by pressing 'Alt+F4'.
@@ -112,10 +93,7 @@ pub trait WindowEventHandler {
     /// Return `EventReply::Continue` to ignore the request, or
     /// `EventReply::DestroyWindow` to destroy the window. Returning an error
     /// will cause the window to be immediately destroyed.
-    fn on_close(
-        &mut self,
-        control: &mut dyn Proxy,
-    ) -> Result<EventReply, Box<dyn std::error::Error>>;
+    fn on_close(&mut self, control: &mut dyn Proxy);
 
     /// Redraws the window's contents and presents it to the screen. This should
     /// be called once per frame.
@@ -123,11 +101,7 @@ pub trait WindowEventHandler {
     /// Return `EventReply::Continue` to continue processing events (and keep
     /// the window open), or `EventReply::DestroyWindow` to destroy the window
     /// after the function returns.
-    fn on_redraw(
-        &mut self,
-        control: &mut dyn Proxy,
-        window_size: Extent,
-    ) -> Result<EventReply, Box<dyn std::error::Error>>;
+    fn on_redraw(&mut self, control: &mut dyn Proxy, window_size: Extent);
 
     /// Processes cursor movement accross the window. This may be called even
     /// when the window is out of focus.
@@ -135,23 +109,14 @@ pub trait WindowEventHandler {
     /// Return `EventReply::Continue` to continue processing events (and keep
     /// the window open), or `EventReply::DestroyWindow` to destroy the window
     /// after the function returns.
-    fn on_mouse_move(
-        &mut self,
-        control: &mut dyn Proxy,
-        new_position: Point,
-    ) -> Result<EventReply, Box<dyn std::error::Error>>;
+    fn on_mouse_move(&mut self, control: &mut dyn Proxy, new_position: Point);
 
     /// Processes a mouse button press.
     ///
     /// Return `EventReply::Continue` to continue processing events (and keep
     /// the window open), or `EventReply::DestroyWindow` to destroy the window
     /// after the function returns.
-    fn on_mouse_button(
-        &mut self,
-        control: &mut dyn Proxy,
-        button: MouseButton,
-        state: ButtonState,
-    ) -> Result<EventReply, Box<dyn std::error::Error>>;
+    fn on_mouse_button(&mut self, control: &mut dyn Proxy, button: MouseButton, state: ButtonState);
 }
 
 /// Expresses the interface for controlling window lifetimes outside of the
@@ -160,6 +125,12 @@ pub trait WindowEventHandler {
 pub trait Proxy {
     /// Creates a new window with the given event handler and associated state.
     fn create_window(&mut self, window: Box<dyn WindowEventHandler>);
+
+    fn destroy_window(&mut self, window: WindowHandle) {
+        unsafe {
+            PostMessageW(window.raw(), UM_DESTROY_WINDOW, WPARAM(0), LPARAM(0));
+        }
+    }
 }
 
 /// Window-specific data that is associated with each window.
@@ -248,6 +219,10 @@ impl Proxy for EventLoop {
     fn create_window(&mut self, window: Box<dyn WindowEventHandler>) {
         self.inner.create_window(window);
     }
+
+    fn destroy_window(&mut self, window: WindowHandle) {
+        self.inner.destroy_window(window);
+    }
 }
 
 impl Default for EventLoop {
@@ -304,32 +279,14 @@ impl Proxy for Rc<RefCell<EventLoopInner>> {
     }
 }
 
-fn handle_event_reply(window: HWND, reply: Result<EventReply, Box<dyn std::error::Error>>) {
-    match reply {
-        Ok(EventReply::Continue) => (),
-        Ok(EventReply::DestroyWindow) => unsafe {
-            DestroyWindow(window);
-        },
-        Err(e) => {
-            println!("An error occurred while handling a window event: {}", e);
-            unsafe {
-                DestroyWindow(window);
-            }
-        }
-    }
-}
-
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_CREATE {
         let create_struct = lparam.0 as *const CREATESTRUCTW;
         let window = (*create_struct).lpCreateParams.cast::<WindowData>();
 
-        handle_event_reply(
-            hwnd,
-            (*window)
-                .event_handler
-                .on_create(&mut (*window).event_loop, WindowHandle::Windows(hwnd)),
-        );
+        (*window)
+            .event_handler
+            .on_create(WindowHandle(hwnd), &mut (*window).event_loop);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, window as isize);
 
         return LRESULT(1);
@@ -344,7 +301,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     let event_handler = &mut (*window).event_handler;
     let control = &mut (*window).event_loop;
 
-    let reply = match msg {
+    match msg {
         WM_CLOSE => event_handler.on_close(control),
         WM_PAINT => {
             let (width, height) = {
@@ -399,12 +356,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 WM_WINDOWPOSCHANGED => LRESULT(0),
                 WM_ERASEBKGND => LRESULT(1),
+                UM_DESTROY_WINDOW => {
+                    DestroyWindow(hwnd);
+                    LRESULT(0)
+                }
                 _ => DefWindowProcW(hwnd, msg, wparam, lparam),
             };
         }
-    };
-
-    handle_event_reply(hwnd, reply);
+    }
 
     LRESULT(0)
 }
