@@ -7,9 +7,8 @@ use fathom::{
     },
     geometry::{Extent, Point, Px},
     renderer::{Renderer, SwapchainHandle},
-    ui::{ColorFill, Context, XSplitPanel},
+    ui::{split_panel::XSplitPanel, ColorFill, Context},
 };
-use rand::random;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let renderer = Rc::new(RefCell::new(Renderer::new()?));

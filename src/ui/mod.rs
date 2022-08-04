@@ -1,18 +1,23 @@
+pub mod widget;
+pub mod split_panel;
+
 use std::fmt::Debug;
 
 use crate::{
     color::Color,
     draw_command::DrawCommand,
     geometry::{Extent, Point, Px, Rect},
-    indexed_tree::{Index, IndexedTree, NodeList},
+    indexed_tree::{Index, IndexedTree, NodeList}, event_loop::{ButtonState, MouseButton},
 };
+
+use self::widget::Widget;
 
 type LayoutTree<'a> = IndexedTree<Layout<'a>>;
 
 #[must_use]
 pub struct Layout<'a> {
     rect: Rect,
-    source: &'a dyn RetainedElement,
+    source: &'a dyn Widget,
 }
 
 pub struct LayoutConstraint {
@@ -20,31 +25,25 @@ pub struct LayoutConstraint {
     max_size: Extent,
 }
 
-pub trait RetainedElement: Debug {
-    fn update(&self);
-
-    fn layout<'a>(
-        &'a self,
-        constraints: LayoutConstraint,
-        layout_tree: &mut LayoutTree<'a>,
-    ) -> (NodeList<Layout<'a>>, Extent);
-
-    fn draw_self(&self, bounds: Rect, command_buffer: &mut Vec<DrawCommand>);
+#[derive(Default)]
+pub struct Input {
+    pub cursor: Option<Point>,
+    pub mouse_buttons: [ButtonState; 3],
 }
 
 pub struct Context {
     window_size: Extent,
-    cursor_position: Option<Point>,
+    input_state: Input,
     background_color: Color,
     draw_commands: Vec<DrawCommand>,
-    ui_root: Option<Box<dyn RetainedElement>>,
+    ui_root: Option<Box<dyn Widget>>,
 }
 
 impl Context {
     pub fn new(window_size: Extent, background_color: Color) -> Self {
         Self {
             window_size,
-            cursor_position: None,
+            input_state: Input::default(),
             background_color,
             draw_commands: Vec::new(),
             ui_root: None,
@@ -70,14 +69,22 @@ impl Context {
     }
 
     pub fn update_cursor(&mut self, position: Point) {
-        self.cursor_position = Some(position);
+        self.input_state.cursor = Some(position);
     }
 
     pub fn cursor(&self) -> Option<Point> {
-        self.cursor_position
+        self.input_state.cursor
     }
 
-    pub fn set_root(&mut self, root: Box<dyn RetainedElement>) -> Option<Box<dyn RetainedElement>> {
+    pub fn update_mouse_button(&mut self, button: MouseButton, state: ButtonState) {
+        self.input_state.mouse_buttons[button as usize] = state;
+    }
+
+    pub fn mouse_button(&self, button: MouseButton) -> ButtonState {
+        self.input_state.mouse_buttons[button as usize]
+    }
+
+    pub fn set_root(&mut self, root: Box<dyn Widget>) -> Option<Box<dyn Widget>> {
         let mut root = Some(root);
         std::mem::swap(&mut root, &mut self.ui_root);
         root
@@ -85,7 +92,7 @@ impl Context {
 
     pub fn update(&mut self) {
         let root = self.ui_root.as_mut().unwrap();
-        root.update();
+        root.update(&self.input_state);
 
         // Must be before layout_tree because it it must live longer than
         // layout_tree.
@@ -133,14 +140,13 @@ impl Context {
     }
 }
 
-#[derive(Debug)]
 struct LayoutRoot<'a> {
-    next: &'a dyn RetainedElement,
+    next: &'a dyn Widget,
 }
 
-impl<'a> RetainedElement for LayoutRoot<'a> {
-    fn update(&self) {
-        self.next.update();
+impl<'a> Widget for LayoutRoot<'a> {
+    fn update(&self, input: &Input) {
+        self.next.update(input);
     }
 
     fn layout<'b>(
@@ -170,78 +176,10 @@ impl<'a> RetainedElement for LayoutRoot<'a> {
 }
 
 #[derive(Debug)]
-pub struct XSplitPanel {
-    pub panes: Vec<(f32, Box<dyn RetainedElement>)>,
-}
-
-impl RetainedElement for XSplitPanel {
-    fn update(&self) {
-        // no-op
-    }
-
-    fn layout<'a>(
-        &'a self,
-        constraints: LayoutConstraint,
-        layout_tree: &mut LayoutTree<'a>,
-    ) -> (NodeList<Layout<'a>>, Extent) {
-        let mut moving_x = Px(0);
-        let mut max_computed_height = Px(0);
-
-        let mut children = NodeList::<Layout<'a>>::new();
-        for (proportion, pane) in &self.panes {
-            let max_width = *proportion * constraints.max_size.width;
-
-            let pane_constraints = LayoutConstraint {
-                min_size: Extent {
-                    width: max_width,
-                    height: Px(0),
-                },
-                max_size: Extent {
-                    width: max_width,
-                    height: constraints.max_size.height,
-                },
-            };
-
-            let (pane_nodes, extent) = pane.layout(pane_constraints, layout_tree);
-
-            let node = layout_tree
-                .new_node(Layout {
-                    rect: Rect::new(
-                        Point {
-                            x: moving_x,
-                            y: Px(0),
-                        },
-                        extent,
-                    ),
-                    source: pane.as_ref(),
-                })
-                .unwrap();
-            layout_tree.add_children(node, pane_nodes).unwrap();
-
-            moving_x += extent.width;
-            max_computed_height = max_computed_height.max(extent.height);
-            children.push(layout_tree, node);
-        }
-
-        (
-            children,
-            Extent {
-                width: moving_x,
-                height: max_computed_height,
-            },
-        )
-    }
-
-    fn draw_self(&self, bounds: Rect, command_buffer: &mut Vec<DrawCommand>) {
-        // no-op
-    }
-}
-
-#[derive(Debug)]
 pub struct ColorFill(pub Color);
 
-impl RetainedElement for ColorFill {
-    fn update(&self) {
+impl Widget for ColorFill {
+    fn update(&self, _input: &Input) {
         // no-op
     }
 
