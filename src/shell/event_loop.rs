@@ -1,5 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
 
+use crate::geometry::{Extent, Point, Px};
+
+use std::{cell::RefCell, rc::Rc};
 use windows::{
     core::PCWSTR,
     Win32::{
@@ -17,8 +19,6 @@ use windows::{
         },
     },
 };
-
-use crate::geometry::{Extent, Point, Px};
 
 const WINDOW_TITLE: &str = "Hello!";
 
@@ -102,7 +102,7 @@ pub trait WindowEventHandler {
     /// window to be immediately destroyed.
     fn on_create(
         &mut self,
-        control: &mut dyn Control,
+        control: &mut dyn Proxy,
         window_handle: WindowHandle,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
@@ -114,7 +114,7 @@ pub trait WindowEventHandler {
     /// will cause the window to be immediately destroyed.
     fn on_close(
         &mut self,
-        control: &mut dyn Control,
+        control: &mut dyn Proxy,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
     /// Redraws the window's contents and presents it to the screen. This should
@@ -125,7 +125,7 @@ pub trait WindowEventHandler {
     /// after the function returns.
     fn on_redraw(
         &mut self,
-        control: &mut dyn Control,
+        control: &mut dyn Proxy,
         window_size: Extent,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
@@ -137,7 +137,7 @@ pub trait WindowEventHandler {
     /// after the function returns.
     fn on_mouse_move(
         &mut self,
-        control: &mut dyn Control,
+        control: &mut dyn Proxy,
         new_position: Point,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
 
@@ -148,7 +148,7 @@ pub trait WindowEventHandler {
     /// after the function returns.
     fn on_mouse_button(
         &mut self,
-        control: &mut dyn Control,
+        control: &mut dyn Proxy,
         button: MouseButton,
         state: ButtonState,
     ) -> Result<EventReply, Box<dyn std::error::Error>>;
@@ -157,7 +157,7 @@ pub trait WindowEventHandler {
 /// Expresses the interface for controlling window lifetimes outside of the
 /// event handler. This is used to permit a new window to be created whilst
 /// within an event handler.
-pub trait Control {
+pub trait Proxy {
     /// Creates a new window with the given event handler and associated state.
     fn create_window(&mut self, window: Box<dyn WindowEventHandler>);
 }
@@ -244,7 +244,7 @@ impl EventLoop {
     }
 }
 
-impl Control for EventLoop {
+impl Proxy for EventLoop {
     fn create_window(&mut self, window: Box<dyn WindowEventHandler>) {
         self.inner.create_window(window);
     }
@@ -267,7 +267,7 @@ impl Drop for EventLoop {
 
 struct EventLoopInner {}
 
-impl Control for Rc<RefCell<EventLoopInner>> {
+impl Proxy for Rc<RefCell<EventLoopInner>> {
     fn create_window(&mut self, window: Box<dyn WindowEventHandler>) {
         let hinstance = unsafe { GetModuleHandleW(None) }.unwrap();
 

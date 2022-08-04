@@ -1,11 +1,11 @@
 use std::{cell::RefCell, rc::Rc};
 
 use fathom::{
-    event_loop::{
-        ButtonState, Control, EventLoop, EventReply, MouseButton, WindowEventHandler, WindowHandle,
-    },
     geometry::{Extent, Point, Px},
     renderer::{Renderer, SwapchainHandle},
+    shell::event_loop::{
+        ButtonState, Proxy, EventLoop, EventReply, MouseButton, WindowEventHandler, WindowHandle,
+    },
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,7 +35,7 @@ impl Window {
 impl WindowEventHandler for Window {
     fn on_create(
         &mut self,
-        _control: &mut dyn Control,
+        _control: &mut dyn Proxy,
         window_handle: WindowHandle,
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
         let WindowHandle::Windows(hwnd) = window_handle;
@@ -45,14 +45,14 @@ impl WindowEventHandler for Window {
 
     fn on_close(
         &mut self,
-        _control: &mut dyn Control,
+        _control: &mut dyn Proxy,
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
         Ok(EventReply::DestroyWindow)
     }
 
     fn on_redraw(
         &mut self,
-        _control: &mut dyn Control,
+        _control: &mut dyn Proxy,
         window_size: Extent,
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
         if window_size.width > Px(0) && window_size.height > Px(0) {
@@ -66,7 +66,7 @@ impl WindowEventHandler for Window {
 
     fn on_mouse_move(
         &mut self,
-        _control: &mut dyn Control,
+        _control: &mut dyn Proxy,
         _new_position: Point,
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
         Ok(EventReply::Continue)
@@ -74,7 +74,7 @@ impl WindowEventHandler for Window {
 
     fn on_mouse_button(
         &mut self,
-        _control: &mut dyn Control,
+        _control: &mut dyn Proxy,
         button: MouseButton,
         state: ButtonState,
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
