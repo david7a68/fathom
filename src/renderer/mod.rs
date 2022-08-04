@@ -19,7 +19,7 @@ use windows::Win32::{
 use crate::{
     color::Color,
     draw_command::DrawCommand,
-    indexed_store::{Index, IndexedStore},
+    indexed_store::{IndexedStore, newtype_index},
 };
 
 use self::{
@@ -289,8 +289,7 @@ impl RenderState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SwapchainHandle(Index);
+newtype_index!(SwapchainHandle, (Swapchain, RenderState));
 
 pub struct Renderer {
     #[allow(dead_code)]
@@ -408,11 +407,11 @@ impl Renderer {
             .swapchains
             .insert((swapchain, render_state))
             .map_err(|_| Error::TooManyObjects)?;
-        Ok(SwapchainHandle(handle))
+        Ok(handle.into())
     }
 
     pub fn destroy_swapchain(&mut self, handle: SwapchainHandle) -> Result<(), Error> {
-        if let Some((mut swapchain, mut state)) = self.swapchains.remove(handle.0) {
+        if let Some((mut swapchain, mut state)) = self.swapchains.remove(handle) {
             let device = self.device.as_ref().unwrap();
             swapchain.destroy_with(device, &self.surface_api)?;
             state.destroy_with(device);
@@ -422,12 +421,12 @@ impl Renderer {
 
     pub fn begin_frame(&mut self, handle: SwapchainHandle) -> Result<(), Error> {
         let device = self.device.as_ref().unwrap();
-        let (swapchain, _) = self.swapchains.get_mut(handle.0).unwrap();
+        let (swapchain, _) = self.swapchains.get_mut(handle).unwrap();
 
         match swapchain.acquire_next_image(device) {
             Ok(_) => Ok(()),
             Err(Error::SwapchainOutOfDate) => {
-                let (swapchain, render_state) = self.swapchains.get_mut(handle.0).unwrap();
+                let (swapchain, render_state) = self.swapchains.get_mut(handle).unwrap();
 
                 swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
                 render_state.update(device, &mut self.pipelines, swapchain)?;
@@ -446,7 +445,7 @@ impl Renderer {
         draw_commands: &[DrawCommand],
     ) -> Result<(), Error> {
         let device = self.device.as_ref().unwrap();
-        let (swapchain, render_state) = self.swapchains.get_mut(handle.0).unwrap();
+        let (swapchain, render_state) = self.swapchains.get_mut(handle).unwrap();
 
         let (frame_index, frame_objects) = swapchain.frame_objects();
 
@@ -497,7 +496,7 @@ impl Renderer {
         match swapchain.present(device) {
             Ok(_) => Ok(()),
             Err(Error::SwapchainOutOfDate) => {
-                let (swapchain, render_state) = self.swapchains.get_mut(handle.0).unwrap();
+                let (swapchain, render_state) = self.swapchains.get_mut(handle).unwrap();
 
                 swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
                 render_state.update(device, &mut self.pipelines, swapchain)?;

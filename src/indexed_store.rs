@@ -1,10 +1,26 @@
 use std::{marker::PhantomData, mem::MaybeUninit};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RawIndex {
+    pub index: u32,
+    generation: u32,
+}
+
+#[derive(Copy, Debug, Eq)]
 pub struct Index<T> {
     pub index: u32,
     generation: u32,
     phantom_data: PhantomData<T>,
+}
+
+impl<T> Clone for Index<T> {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index,
+            generation: self.generation,
+            phantom_data: PhantomData,
+        }
+    }
 }
 
 impl<T> Index<T> {
@@ -15,7 +31,106 @@ impl<T> Index<T> {
             phantom_data: PhantomData,
         }
     }
+
+    pub fn as_raw(&self) -> RawIndex {
+        RawIndex {
+            index: self.index,
+            generation: self.generation,
+        }
+    }
+
+    /// # Safety
+    ///
+    /// The caller must ensure that the index refers to an object of the same
+    /// type.
+    pub unsafe fn from_raw(raw: RawIndex) -> Self {
+        Self {
+            index: raw.index,
+            generation: raw.generation,
+            phantom_data: PhantomData,
+        }
+    }
 }
+
+impl<T> Default for Index<T> {
+    fn default() -> Self {
+        Self::null()
+    }
+}
+
+impl<T> PartialEq for Index<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index && self.generation == other.generation
+    }
+}
+
+/// Derives a newtype of [`Index`](crate::indexed_store::Index) to permit the
+/// use of internal types as the discriminant without exposing them to the user
+/// and to offer a simple way of further distinguishing between different
+/// [`IndexedStore`](crate::indexed_store::IndexedStore)s.
+///
+/// The derived implements `Clone`, `Copy`, `Debug`, `Default`, and `PartialEq`,
+/// as well as `From<Index<T>> for NewType` and `From<NewType> for Index<T>` for
+/// convenience.
+macro_rules! newtype_index {
+    ($name: ident, $discriminant: ty) => {
+        pub struct $name(
+            crate::indexed_store::RawIndex,
+            std::marker::PhantomData<$discriminant>,
+        );
+
+        impl Clone for $name {
+            fn clone(&self) -> Self {
+                Self(self.0.clone(), std::marker::PhantomData)
+            }
+        }
+
+        impl Copy for $name {}
+
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_tuple("$name").field(&self.0).finish()
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self(
+                    crate::indexed_store::RawIndex::default(),
+                    std::marker::PhantomData,
+                )
+            }
+        }
+
+        impl PartialEq for $name {
+            fn eq(&self, other: &Self) -> bool {
+                self.0 == other.0
+            }
+        }
+
+        impl $name {
+            pub fn index(&self) -> u32 {
+                self.0.index
+            }
+        }
+
+        impl From<crate::indexed_store::Index<$discriminant>> for $name {
+            /// Converts from an `Index` into a newtype for use.
+            fn from(index: crate::indexed_store::Index<$discriminant>) -> Self {
+                Self(index.as_raw(), std::marker::PhantomData)
+            }
+        }
+
+        impl From<$name> for crate::indexed_store::Index<$discriminant> {
+            /// Converts from a newtype to the `Index` base type.
+            fn from(index: $name) -> Self {
+                unsafe { Self::from_raw(index.0) }
+            }
+        }
+    };
+}
+
+pub(crate) use newtype_index;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -60,9 +175,10 @@ impl<T> IndexedStore<T> {
     }
 
     /// Checks that the given index refers to a value.
-    pub fn is_valid(&self, index: Index<T>) -> bool {
+    pub fn is_valid(&self, index: impl Into<Index<T>>) -> bool {
         self.validate_invariants();
 
+        let index = index.into();
         if let Some(slot_generation) = self.generations.get(index.index as usize) {
             *slot_generation == index.generation
         } else {
@@ -113,9 +229,10 @@ impl<T> IndexedStore<T> {
         }
     }
 
-    pub fn get(&self, index: Index<T>) -> Option<&T> {
+    pub fn get(&self, index: impl Into<Index<T>>) -> Option<&T> {
         self.validate_invariants();
 
+        let index = index.into();
         if let Some(slot_generation) = self.generations.get(index.index as usize) {
             if *slot_generation == index.generation {
                 let value = self.values.get(index.index as usize)?;
@@ -125,9 +242,10 @@ impl<T> IndexedStore<T> {
         None
     }
 
-    pub fn get_mut(&mut self, index: Index<T>) -> Option<&mut T> {
+    pub fn get_mut(&mut self, index: impl Into<Index<T>>) -> Option<&mut T> {
         self.validate_invariants();
 
+        let index = index.into();
         if let Some(slot_generation) = self.generations.get_mut(index.index as usize) {
             if *slot_generation == index.generation {
                 let value = self.values.get_mut(index.index as usize)?;
@@ -137,9 +255,10 @@ impl<T> IndexedStore<T> {
         None
     }
 
-    pub fn remove(&mut self, index: Index<T>) -> Option<T> {
+    pub fn remove(&mut self, index: impl Into<Index<T>>) -> Option<T> {
         self.validate_invariants();
 
+        let index = index.into();
         if let Some(slot_generation) = self.generations.get_mut(index.index as usize) {
             if *slot_generation == index.generation {
                 let mut value_swap = MaybeUninit::uninit();
