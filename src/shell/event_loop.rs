@@ -7,14 +7,14 @@ use windows::{
         Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
             GetMessageW, GetWindowLongPtrW, LoadCursorW, PeekMessageW, PostMessageW,
             PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage,
             CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG,
             PM_REMOVE, SW_SHOW, WINDOW_EX_STYLE, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
             WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
-            WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER, WM_WINDOWPOSCHANGED, WNDCLASSEXW,
-            WS_OVERLAPPEDWINDOW,
+            WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_USER, WM_WINDOWPOSCHANGED,
+            WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
         },
     },
 };
@@ -126,11 +126,7 @@ pub trait Proxy {
     /// Creates a new window with the given event handler and associated state.
     fn create_window(&mut self, window: Box<dyn WindowEventHandler>);
 
-    fn destroy_window(&mut self, window: WindowHandle) {
-        unsafe {
-            PostMessageW(window.raw(), UM_DESTROY_WINDOW, WPARAM(0), LPARAM(0));
-        }
-    }
+    fn destroy_window(&mut self, window: WindowHandle);
 }
 
 /// Window-specific data that is associated with each window.
@@ -138,6 +134,7 @@ pub trait Proxy {
 /// This is kept behind a `Box` to permit it to be associated with Windows'
 /// windows through the `SetWindowLongPtr()`/`GetWindowLongPtr()` API.
 struct WindowData {
+    extent: Extent,
     /// A reference to data shared between every window. The refcount is used to
     /// explicitly track the number of windows that are currently open. There
     /// are no open windows if the refcount is 1, since one reference is
@@ -145,6 +142,74 @@ struct WindowData {
     event_loop: Rc<RefCell<EventLoopInner>>,
     /// A pointer to the window event handler.
     event_handler: Box<dyn WindowEventHandler>,
+}
+
+impl WindowData {
+    fn wndproc(&mut self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        match msg {
+            WM_CREATE => {
+                self.event_handler
+                    .on_create(WindowHandle(hwnd), &mut self.event_loop);
+            }
+            WM_CLOSE => self.event_handler.on_close(&mut self.event_loop),
+            WM_PAINT => self
+                .event_handler
+                .on_redraw(&mut self.event_loop, self.extent),
+            WM_SIZE => {
+                let width = lparam.0 as i16;
+                let height = (lparam.0 >> 16) as i16;
+                self.extent = Extent {
+                    width: Px(width),
+                    height: Px(height),
+                };
+            }
+            WM_MOUSEMOVE => {
+                let x = Px(lparam.0 as i16);
+                let y = Px((lparam.0 >> 16) as i16);
+                self.event_handler
+                    .on_mouse_move(&mut self.event_loop, Point { x, y });
+            }
+            WM_LBUTTONDOWN => self.event_handler.on_mouse_button(
+                &mut self.event_loop,
+                MouseButton::Left,
+                ButtonState::Pressed,
+            ),
+            WM_LBUTTONUP => self.event_handler.on_mouse_button(
+                &mut self.event_loop,
+                MouseButton::Left,
+                ButtonState::Released,
+            ),
+            WM_RBUTTONDOWN => self.event_handler.on_mouse_button(
+                &mut self.event_loop,
+                MouseButton::Right,
+                ButtonState::Pressed,
+            ),
+            WM_RBUTTONUP => self.event_handler.on_mouse_button(
+                &mut self.event_loop,
+                MouseButton::Right,
+                ButtonState::Released,
+            ),
+            WM_MBUTTONDOWN => self.event_handler.on_mouse_button(
+                &mut self.event_loop,
+                MouseButton::Middle,
+                ButtonState::Pressed,
+            ),
+            WM_MBUTTONUP => self.event_handler.on_mouse_button(
+                &mut self.event_loop,
+                MouseButton::Middle,
+                ButtonState::Released,
+            ),
+            special_return => {
+                return match special_return {
+                    WM_WINDOWPOSCHANGED => LRESULT(0),
+                    WM_ERASEBKGND => LRESULT(1),
+                    _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+                };
+            }
+        }
+
+        LRESULT(0)
+    }
 }
 
 /// The event loop is responsible for querying window events from the OS and
@@ -166,7 +231,7 @@ impl EventLoop {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>().try_into().unwrap(),
                 style: CS_VREDRAW | CS_HREDRAW,
                 hInstance: hinstance,
-                lpfnWndProc: Some(wndproc),
+                lpfnWndProc: Some(unsafe_wndproc),
                 lpszClassName: PCWSTR(WNDCLASS_NAME.as_ptr()),
                 hCursor: arrow_cursor,
                 ..WNDCLASSEXW::default()
@@ -256,6 +321,7 @@ impl Proxy for Rc<RefCell<EventLoopInner>> {
         let window = Box::into_raw(Box::new(WindowData {
             event_loop: self.clone(),
             event_handler: window,
+            extent: Extent::default(),
         }));
 
         let hwnd = unsafe {
@@ -277,93 +343,45 @@ impl Proxy for Rc<RefCell<EventLoopInner>> {
 
         unsafe { ShowWindow(hwnd, SW_SHOW) };
     }
+
+    fn destroy_window(&mut self, window: WindowHandle) {
+        unsafe {
+            PostMessageW(window.raw(), UM_DESTROY_WINDOW, WPARAM(0), LPARAM(0));
+        }
+    }
 }
 
-unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn unsafe_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     if msg == WM_CREATE {
         let create_struct = lparam.0 as *const CREATESTRUCTW;
         let window = (*create_struct).lpCreateParams.cast::<WindowData>();
-
-        (*window)
-            .event_handler
-            .on_create(WindowHandle(hwnd), &mut (*window).event_loop);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, window as isize);
-
-        return LRESULT(1);
     }
 
     let window = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowData;
 
     if window.is_null() {
-        return DefWindowProcW(hwnd, msg, wparam, lparam);
-    }
-
-    let event_handler = &mut (*window).event_handler;
-    let control = &mut (*window).event_loop;
-
-    match msg {
-        WM_CLOSE => event_handler.on_close(control),
-        WM_PAINT => {
-            let (width, height) = {
-                let mut rect = std::mem::zeroed();
-                GetClientRect(hwnd, &mut rect);
-                (rect.right - rect.left, rect.bottom - rect.top)
-            };
-            event_handler.on_redraw(
-                control,
-                Extent {
-                    width: width.try_into().unwrap(),
-                    height: height.try_into().unwrap(),
-                },
-            )
-        }
-        WM_MOUSEMOVE => {
-            // cast to i16 preserves sign bit
-            let x = lparam.0 as i16;
-            let y = (lparam.0 >> 16) as i16;
-            event_handler.on_mouse_move(control, Point { x: Px(x), y: Px(y) })
-        }
-        WM_LBUTTONDOWN => {
-            event_handler.on_mouse_button(control, MouseButton::Left, ButtonState::Pressed)
-        }
-        WM_LBUTTONUP => {
-            event_handler.on_mouse_button(control, MouseButton::Left, ButtonState::Released)
-        }
-        WM_RBUTTONDOWN => {
-            event_handler.on_mouse_button(control, MouseButton::Right, ButtonState::Pressed)
-        }
-        WM_RBUTTONUP => {
-            event_handler.on_mouse_button(control, MouseButton::Right, ButtonState::Released)
-        }
-        WM_MBUTTONDOWN => {
-            event_handler.on_mouse_button(control, MouseButton::Middle, ButtonState::Pressed)
-        }
-        WM_MBUTTONUP => {
-            event_handler.on_mouse_button(control, MouseButton::Middle, ButtonState::Released)
-        }
-        special_return => {
-            return match special_return {
-                WM_DESTROY => {
-                    std::mem::drop(Box::from_raw(window));
-
-                    // If we only have one strong reference, it must be owned by the
-                    // event loop and there are no more windows to source events from.
-                    // In this case, exit the event loop.
-                    if Rc::strong_count(control) == 1 {
-                        PostQuitMessage(0);
-                    }
-                    LRESULT(0)
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    } else {
+        match msg {
+            WM_DESTROY => {
+                std::mem::drop(Box::from_raw(window));
+                println!("destroy");
+                if Rc::strong_count(&(*window).event_loop) == 1 {
+                    PostQuitMessage(0);
                 }
-                WM_WINDOWPOSCHANGED => LRESULT(0),
-                WM_ERASEBKGND => LRESULT(1),
-                UM_DESTROY_WINDOW => {
-                    DestroyWindow(hwnd);
-                    LRESULT(0)
-                }
-                _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-            };
+                LRESULT(0)
+            }
+            UM_DESTROY_WINDOW => {
+                DestroyWindow(hwnd);
+                LRESULT(0)
+            }
+            rest => (*window).wndproc(hwnd, rest, wparam, lparam),
         }
     }
-
-    LRESULT(0)
 }

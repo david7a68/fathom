@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 struct Window {
-    window: Option<WindowHandle>,
+    handle: Option<WindowHandle>,
     swapchain: SwapchainHandle,
     renderer: Rc<RefCell<Renderer>>,
 }
@@ -27,7 +27,7 @@ struct Window {
 impl Window {
     fn new(renderer: Rc<RefCell<Renderer>>) -> Self {
         Self {
-            window: None,
+            handle: None,
             swapchain: SwapchainHandle::default(),
             renderer,
         }
@@ -36,7 +36,7 @@ impl Window {
 
 impl WindowEventHandler for Window {
     fn on_create(&mut self, window_handle: WindowHandle, _control: &mut dyn Proxy) {
-        self.window = Some(window_handle);
+        self.handle = Some(window_handle);
         self.swapchain = self
             .renderer
             .borrow_mut()
@@ -44,7 +44,9 @@ impl WindowEventHandler for Window {
             .unwrap();
     }
 
-    fn on_close(&mut self, _control: &mut dyn Proxy) {}
+    fn on_close(&mut self, control: &mut dyn Proxy) {
+        control.destroy_window(self.handle.unwrap());
+    }
 
     fn on_redraw(&mut self, _control: &mut dyn Proxy, window_size: Extent) {
         if window_size.width > Px(0) && window_size.height > Px(0) {
@@ -71,7 +73,7 @@ impl WindowEventHandler for Window {
             },
             MouseButton::Right => {
                 if state == ButtonState::Released {
-                    control.destroy_window(self.window.unwrap());
+                    control.destroy_window(self.handle.unwrap());
                 }
             }
             MouseButton::Middle => {}
