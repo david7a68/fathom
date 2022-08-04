@@ -32,6 +32,10 @@ impl<T> Index<T> {
         }
     }
 
+    pub fn is_null(&self) -> bool {
+        self.index == 0 && self.generation == 0
+    }
+
     pub fn as_raw(&self) -> RawIndex {
         RawIndex {
             index: self.index,

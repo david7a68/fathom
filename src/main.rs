@@ -1,13 +1,11 @@
 use std::{cell::RefCell, rc::Rc};
 
 use fathom::{
-    color::Color,
     event_loop::{
         ButtonState, Control, EventLoop, EventReply, MouseButton, WindowEventHandler, WindowHandle,
     },
     geometry::{Extent, Point, Px},
     renderer::{Renderer, SwapchainHandle},
-    ui::{split_panel::XSplitPanel, ColorFill, Context},
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,8 +21,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct Window {
     swapchain: SwapchainHandle,
     renderer: Rc<RefCell<Renderer>>,
-    ui_context: Context,
-    do_once: bool,
 }
 
 impl Window {
@@ -32,14 +28,6 @@ impl Window {
         Self {
             swapchain: SwapchainHandle::default(),
             renderer,
-            ui_context: Context::new(
-                Extent {
-                    width: Px(0),
-                    height: Px(0),
-                },
-                Color::BLUE,
-            ),
-            do_once: false,
         }
     }
 }
@@ -68,27 +56,9 @@ impl WindowEventHandler for Window {
         window_size: Extent,
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
         if window_size.width > Px(0) && window_size.height > Px(0) {
-            self.ui_context.update_size(window_size);
-
-            let mut renderer = self.renderer.borrow_mut();
-            renderer.begin_frame(self.swapchain)?;
-
-            let ui = &mut self.ui_context;
-
-            if !self.do_once {
-                ui.set_root(Box::new(XSplitPanel {
-                    panes: vec![
-                        (0.3, Box::new(ColorFill(Color::RED))),
-                        (0.7, Box::new(ColorFill(Color::GREEN))),
-                    ],
-                }));
-
-                self.do_once = true;
-            }
-
-            ui.update();
-
-            renderer.end_frame(self.swapchain, Color::BLACK, ui.draw_commands())?;
+            // let mut renderer = self.renderer.borrow_mut();
+            // renderer.begin_frame(self.swapchain)?;
+            // renderer.end_frame(self.swapchain, Color::BLACK, ui.draw_commands())?;
         }
 
         Ok(EventReply::Continue)
@@ -97,9 +67,8 @@ impl WindowEventHandler for Window {
     fn on_mouse_move(
         &mut self,
         _control: &mut dyn Control,
-        new_position: Point,
+        _new_position: Point,
     ) -> Result<EventReply, Box<dyn std::error::Error>> {
-        self.ui_context.update_cursor(new_position);
         Ok(EventReply::Continue)
     }
 
