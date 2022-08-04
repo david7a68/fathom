@@ -1,16 +1,18 @@
-use std::mem::MaybeUninit;
+use std::{marker::PhantomData, mem::MaybeUninit};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Index {
+pub struct Index<T> {
     pub index: u32,
     generation: u32,
+    phantom_data: PhantomData<T>,
 }
 
-impl Index {
+impl<T> Index<T> {
     pub fn null() -> Self {
         Self {
             index: 0,
             generation: 0,
+            phantom_data: PhantomData,
         }
     }
 }
@@ -58,7 +60,7 @@ impl<T> IndexedStore<T> {
     }
 
     /// Checks that the given index refers to a value.
-    pub fn is_valid(&self, index: Index) -> bool {
+    pub fn is_valid(&self, index: Index<T>) -> bool {
         self.validate_invariants();
 
         if let Some(slot_generation) = self.generations.get(index.index as usize) {
@@ -73,7 +75,7 @@ impl<T> IndexedStore<T> {
     }
 
     /// Inserts a new value into the store.
-    pub fn insert(&mut self, value: T) -> Result<Index, Error> {
+    pub fn insert(&mut self, value: T) -> Result<Index<T>, Error> {
         self.validate_invariants();
 
         if self.values.is_empty() {
@@ -83,6 +85,7 @@ impl<T> IndexedStore<T> {
             Ok(Index {
                 index: 0,
                 generation: 1,
+                phantom_data: PhantomData,
             })
         } else if let Some(index) = self.free_indices.pop() {
             self.values[index as usize] = MaybeUninit::new(value);
@@ -90,6 +93,7 @@ impl<T> IndexedStore<T> {
             Ok(Index {
                 index,
                 generation: self.generations[index as usize],
+                phantom_data: PhantomData,
             })
         } else {
             let index = self
@@ -104,11 +108,12 @@ impl<T> IndexedStore<T> {
             Ok(Index {
                 index,
                 generation: 0,
+                phantom_data: PhantomData,
             })
         }
     }
 
-    pub fn get(&self, index: Index) -> Option<&T> {
+    pub fn get(&self, index: Index<T>) -> Option<&T> {
         self.validate_invariants();
 
         if let Some(slot_generation) = self.generations.get(index.index as usize) {
@@ -120,7 +125,7 @@ impl<T> IndexedStore<T> {
         None
     }
 
-    pub fn get_mut(&mut self, index: Index) -> Option<&mut T> {
+    pub fn get_mut(&mut self, index: Index<T>) -> Option<&mut T> {
         self.validate_invariants();
 
         if let Some(slot_generation) = self.generations.get_mut(index.index as usize) {
@@ -132,7 +137,7 @@ impl<T> IndexedStore<T> {
         None
     }
 
-    pub fn remove(&mut self, index: Index) -> Option<T> {
+    pub fn remove(&mut self, index: Index<T>) -> Option<T> {
         self.validate_invariants();
 
         if let Some(slot_generation) = self.generations.get_mut(index.index as usize) {
@@ -226,18 +231,21 @@ mod tests {
         let index_3 = Index {
             index: 0,
             generation: 0,
+            phantom_data: PhantomData,
         };
         assert_eq!(store.get(index_3), None);
 
         let index_4 = Index {
             index: 0,
             generation: 2,
+            phantom_data: PhantomData,
         };
         assert_eq!(store.get(index_4), None);
 
         let index_5 = Index {
             index: 10,
             generation: 0,
+            phantom_data: PhantomData,
         };
         assert_eq!(store.get(index_5), None);
     }

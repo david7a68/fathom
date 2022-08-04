@@ -1,6 +1,10 @@
-use crate::{indexed_tree::NodeList, geometry::{Extent, Rect}, draw_command::DrawCommand};
+use crate::{
+    draw_command::DrawCommand,
+    geometry::{Extent, Rect},
+    indexed_tree::NodeList,
+};
 
-use super::{Input, LayoutConstraint, LayoutTree, Layout};
+use super::{Input, Layout, LayoutConstraint, LayoutTree};
 
 pub trait Widget {
     fn update(&self, input: &Input);

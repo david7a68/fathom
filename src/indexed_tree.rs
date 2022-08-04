@@ -4,17 +4,17 @@ use crate::indexed_store::IndexedStore;
 
 #[repr(transparent)]
 #[derive(Debug, Eq)]
-pub struct Index<T>(crate::indexed_store::Index, std::marker::PhantomData<T>);
+pub struct Index<T>(crate::indexed_store::Index<T>);
 
-impl<T> From<crate::indexed_store::Index> for Index<T> {
-    fn from(index: crate::indexed_store::Index) -> Self {
-        Index(index, std::marker::PhantomData)
+impl<T> From<crate::indexed_store::Index<T>> for Index<T> {
+    fn from(index: crate::indexed_store::Index<T>) -> Self {
+        Index(index)
     }
 }
 
 impl<T> Clone for Index<T> {
     fn clone(&self) -> Self {
-        Self(self.0, std::marker::PhantomData)
+        Self(self.0)
     }
 }
 
@@ -22,10 +22,7 @@ impl<T> Copy for Index<T> {}
 
 impl<T> Default for Index<T> {
     fn default() -> Self {
-        Self(
-            crate::indexed_store::Index::default(),
-            std::marker::PhantomData,
-        )
+        Self(crate::indexed_store::Index::default())
     }
 }
 
@@ -183,7 +180,7 @@ impl<T> IndexedTree<T> {
         };
 
         match self.store.insert(node) {
-            Ok(index) => Ok(Index(index, std::marker::PhantomData)),
+            Ok(index) => Ok(Index(index)),
             Err(e) => match e {
                 crate::indexed_store::Error::OutOfIndices => Err(Error::OutOfIndices),
             },

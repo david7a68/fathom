@@ -1,13 +1,14 @@
-pub mod widget;
 pub mod split_panel;
+pub mod widget;
 
 use std::fmt::Debug;
 
 use crate::{
     color::Color,
     draw_command::DrawCommand,
+    event_loop::{ButtonState, MouseButton},
     geometry::{Extent, Point, Px, Rect},
-    indexed_tree::{Index, IndexedTree, NodeList}, event_loop::{ButtonState, MouseButton},
+    indexed_tree::{Index, IndexedTree, NodeList},
 };
 
 use self::widget::Widget;
