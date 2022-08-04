@@ -58,6 +58,13 @@ impl std::ops::Mul<f32> for Px {
     }
 }
 
+impl std::ops::Mul<Px> for f32 {
+    type Output = Px;
+    fn mul(self, other: Px) -> Self::Output {
+        (self * other.0 as f32).into()
+    }
+}
+
 /// A 2D point in space. It may be negative (to the left or above the top-left
 /// corner of the window) if the cursor has been captured and has left the
 /// window.

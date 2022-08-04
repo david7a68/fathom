@@ -7,7 +7,7 @@ use fathom::{
     },
     geometry::{Extent, Point, Px},
     renderer::{Renderer, SwapchainHandle},
-    ui::{ColorFill, Context},
+    ui::{ColorFill, Context, XSplitPanel},
 };
 use rand::random;
 
@@ -77,24 +77,12 @@ impl WindowEventHandler for Window {
             let ui = &mut self.ui_context;
 
             if !self.do_once {
-                // ui.set_root(Box::new(XSplitPanel {
-                //     panes: vec![
-                //         (
-                //             0.3,
-                //             XSplitPane {
-                //                 body: Box::new(ColorFill(Color::RED)),
-                //             },
-                //         ),
-                //         (
-                //             0.7,
-                //             XSplitPane {
-                //                 body: Box::new(ColorFill(Color::GREEN)),
-                //             },
-                //         ),
-                //     ],
-                // }));
-
-                ui.set_root(Box::new(ColorFill(Color::RED)));
+                ui.set_root(Box::new(XSplitPanel {
+                    panes: vec![
+                        (0.3, Box::new(ColorFill(Color::RED))),
+                        (0.7, Box::new(ColorFill(Color::GREEN))),
+                    ],
+                }));
 
                 self.do_once = true;
             }

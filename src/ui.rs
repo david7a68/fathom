@@ -29,7 +29,7 @@ pub trait RetainedElement: Debug {
         layout_tree: &mut LayoutTree<'a>,
     ) -> (NodeList<Layout<'a>>, Extent);
 
-    fn draw(&self, bounds: Rect, command_buffer: &mut Vec<DrawCommand>);
+    fn draw_self(&self, bounds: Rect, command_buffer: &mut Vec<DrawCommand>);
 }
 
 pub struct Context {
@@ -125,7 +125,7 @@ impl Context {
         buffer: &mut Vec<DrawCommand>,
     ) {
         let layout = layout_tree.get(node).unwrap();
-        layout.source.draw(layout.rect, buffer);
+        layout.source.draw_self(layout.rect, buffer);
 
         for child_id in layout_tree.children_ids(node) {
             Self::collect_draw_commands(layout_tree, child_id, buffer);
@@ -164,8 +164,76 @@ impl<'a> RetainedElement for LayoutRoot<'a> {
         (list, extent)
     }
 
-    fn draw(&self, bounds: Rect, command_buffer: &mut Vec<DrawCommand>) {
-        self.next.draw(bounds, command_buffer);
+    fn draw_self(&self, bounds: Rect, command_buffer: &mut Vec<DrawCommand>) {
+        self.next.draw_self(bounds, command_buffer);
+    }
+}
+
+#[derive(Debug)]
+pub struct XSplitPanel {
+    pub panes: Vec<(f32, Box<dyn RetainedElement>)>,
+}
+
+impl RetainedElement for XSplitPanel {
+    fn update(&self) {
+        // no-op
+    }
+
+    fn layout<'a>(
+        &'a self,
+        constraints: LayoutConstraint,
+        layout_tree: &mut LayoutTree<'a>,
+    ) -> (NodeList<Layout<'a>>, Extent) {
+        let mut moving_x = Px(0);
+        let mut max_computed_height = Px(0);
+
+        let mut children = NodeList::<Layout<'a>>::new();
+        for (proportion, pane) in &self.panes {
+            let max_width = *proportion * constraints.max_size.width;
+
+            let pane_constraints = LayoutConstraint {
+                min_size: Extent {
+                    width: max_width,
+                    height: Px(0),
+                },
+                max_size: Extent {
+                    width: max_width,
+                    height: constraints.max_size.height,
+                },
+            };
+
+            let (pane_nodes, extent) = pane.layout(pane_constraints, layout_tree);
+
+            let node = layout_tree
+                .new_node(Layout {
+                    rect: Rect::new(
+                        Point {
+                            x: moving_x,
+                            y: Px(0),
+                        },
+                        extent,
+                    ),
+                    source: pane.as_ref(),
+                })
+                .unwrap();
+            layout_tree.add_children(node, pane_nodes).unwrap();
+
+            moving_x += extent.width;
+            max_computed_height = max_computed_height.max(extent.height);
+            children.push(layout_tree, node);
+        }
+
+        (
+            children,
+            Extent {
+                width: moving_x,
+                height: max_computed_height,
+            },
+        )
+    }
+
+    fn draw_self(&self, bounds: Rect, command_buffer: &mut Vec<DrawCommand>) {
+        // no-op
     }
 }
 
@@ -185,7 +253,7 @@ impl RetainedElement for ColorFill {
         (NodeList::new(), constraints.max_size)
     }
 
-    fn draw(&self, bounds: Rect, command_buffer: &mut Vec<DrawCommand>) {
+    fn draw_self(&self, bounds: Rect, command_buffer: &mut Vec<DrawCommand>) {
         command_buffer.push(DrawCommand::Rect(bounds, self.0));
     }
 }
