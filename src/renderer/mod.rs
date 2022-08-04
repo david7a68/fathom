@@ -19,7 +19,7 @@ use windows::Win32::{
 use crate::{
     color::Color,
     draw_command::DrawCommand,
-    indexed_store::{IndexedStore, newtype_index},
+    indexed_store::{newtype_index, IndexedStore},
 };
 
 use self::{
