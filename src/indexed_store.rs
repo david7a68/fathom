@@ -299,6 +299,14 @@ impl<T> Drop for IndexedStore<T> {
                 if *last == index as u32 {
                     self.free_indices.pop();
                     continue;
+                } else {
+                    // SAFETY: This is safe because we're iterating solely through
+                    // indices within self.values
+                    unsafe {
+                        self.values
+                            .get_unchecked_mut(index as usize)
+                            .assume_init_drop();
+                    }
                 }
             } else {
                 // SAFETY: This is safe because we're iterating solely through
@@ -389,38 +397,43 @@ mod tests {
 
     #[test]
     fn drop() {
-        struct T(Rc<RefCell<bool>>);
+        struct T(u32);
 
         impl Drop for T {
             fn drop(&mut self) {
-                *self.0.borrow_mut() = true;
+                self.0 += 1;
             }
         }
 
         let mut store = IndexedStore::new();
 
-        let dropped = Rc::new(RefCell::new(false));
+        let dropped = Rc::new(RefCell::new(T(0)));
+        assert_eq!(Rc::strong_count(&dropped), 1);
 
         {
             // pad
-            let a = store.insert(T(dropped.clone())).unwrap();
-            let b = store.insert(T(dropped.clone())).unwrap();
-            let c = store.insert(T(dropped.clone())).unwrap();
-            let d = store.insert(T(dropped.clone())).unwrap();
+            let a = store.insert(dropped.clone()).unwrap();
+            let b = store.insert(dropped.clone()).unwrap();
+            let c = store.insert(dropped.clone()).unwrap();
+            let d = store.insert(dropped.clone()).unwrap();
 
             store.remove(a);
             store.remove(b);
             store.remove(c);
             store.remove(d);
         }
+        assert_eq!(Rc::strong_count(&dropped), 1);
 
-        let _ = store.insert(T(dropped.clone())).unwrap();
+        assert_eq!(store.free_indices.len(), 4);
+        let _ = store.insert(dropped.clone()).unwrap();
+        assert_eq!(Rc::strong_count(&dropped), 2);
+        assert_eq!(store.free_indices.len(), 3);
 
         {
-            let a = store.insert(T(dropped.clone())).unwrap();
-            let b = store.insert(T(dropped.clone())).unwrap();
-            let c = store.insert(T(dropped.clone())).unwrap();
-            let d = store.insert(T(dropped.clone())).unwrap();
+            let a = store.insert(dropped.clone()).unwrap();
+            let b = store.insert(dropped.clone()).unwrap();
+            let c = store.insert(dropped.clone()).unwrap();
+            let d = store.insert(dropped.clone()).unwrap();
 
             store.remove(a);
             store.remove(b);
@@ -429,7 +442,7 @@ mod tests {
         }
 
         std::mem::drop(store);
-
-        assert!(*dropped.borrow());
+        assert_eq!(Rc::strong_count(&dropped), 1);
+        assert_eq!(dropped.borrow().0, 0);
     }
 }
