@@ -19,6 +19,11 @@ pub enum ButtonState {
     Pressed,
 }
 
+pub struct WindowConfig<'a> {
+    pub title: &'a str,
+    pub extent: Option<Extent>,
+}
+
 pub use platform::WindowHandle;
 
 /// This trait defines the interface for a window event handler. It is
@@ -90,7 +95,7 @@ pub trait WindowEventHandler {
 /// within an event handler.
 pub trait Proxy {
     /// Creates a new window with the given event handler and associated state.
-    fn create_window(&self, window: Box<dyn WindowEventHandler>);
+    fn create_window(&self, config: &WindowConfig, window: Box<dyn WindowEventHandler>);
 
     fn destroy_window(&self, window: WindowHandle);
 }
@@ -106,8 +111,8 @@ impl EventLoop {
         Self(platform::EventLoop::new())
     }
 
-    pub fn create_window(&self, window: Box<dyn WindowEventHandler>) {
-        self.0.create_window(window);
+    pub fn create_window(&self, config: &WindowConfig, window: Box<dyn WindowEventHandler>) {
+        self.0.create_window(config, window);
     }
 
     /// Runs the event loop until there are no windows open.

@@ -1,15 +1,9 @@
-use fathom::{
-    application::{Application, WindowDesc},
-    geometry::{Extent, Px},
-};
+use fathom::application::{Application, WindowConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    Application::new()?.run(&[WindowDesc {
-        title: "Hello, world!".to_string(),
-        size: Extent {
-            width: Px(800),
-            height: Px(600),
-        },
+    Application::new()?.run(&[WindowConfig {
+        title: "Window #1",
+        extent: None,
     }]);
     Ok(())
 }

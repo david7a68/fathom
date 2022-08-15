@@ -8,15 +8,12 @@ use crate::{
     },
 };
 
+pub use crate::shell::event_loop::WindowConfig;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("an internal renderer error occurred")]
     Renderer(#[from] crate::renderer::Error),
-}
-
-pub struct WindowDesc {
-    pub title: String,
-    pub size: Extent,
 }
 
 pub struct Application {
@@ -32,13 +29,10 @@ impl Application {
         })
     }
 
-    pub fn run(&mut self, windows: &[WindowDesc]) {
-        for _desc in windows {
-            self.event_loop.create_window(Box::new(AppWindow {
-                handle: None,
-                swapchain: SwapchainHandle::default(),
-                renderer: self.renderer.clone(),
-            }));
+    pub fn run(&mut self, windows: &[WindowConfig]) {
+        for config in windows {
+            self.event_loop
+                .create_window(config, Box::new(AppWindow::new(self.renderer.clone())));
         }
 
         self.event_loop.run();
@@ -49,6 +43,16 @@ struct AppWindow {
     handle: Option<WindowHandle>,
     swapchain: SwapchainHandle,
     renderer: Rc<RefCell<Renderer>>,
+}
+
+impl AppWindow {
+    pub fn new(renderer: Rc<RefCell<Renderer>>) -> Self {
+        Self {
+            handle: None,
+            swapchain: SwapchainHandle::default(),
+            renderer,
+        }
+    }
 }
 
 impl WindowEventHandler for AppWindow {
@@ -81,25 +85,27 @@ impl WindowEventHandler for AppWindow {
     ) {
         match button {
             MouseButton::Left => match state {
-                ButtonState::Released => {},
+                ButtonState::Released => {}
                 ButtonState::Pressed => {
-                    control.create_window(Box::new(AppWindow {
-                        handle: None,
-                        swapchain: SwapchainHandle::default(),
-                        renderer: self.renderer.clone(),
-                    }));
-                },
+                    control.create_window(
+                        &WindowConfig {
+                            title: &format!("Window #{}", Rc::strong_count(&self.renderer)),
+                            extent: None,
+                        },
+                        Box::new(AppWindow::new(self.renderer.clone())),
+                    );
+                }
             },
             MouseButton::Right => match state {
-                ButtonState::Released => {},
+                ButtonState::Released => {}
                 ButtonState::Pressed => {
                     control.destroy_window(self.handle.unwrap());
-                },
+                }
             },
             MouseButton::Middle => match state {
-                ButtonState::Released => {},
-                ButtonState::Pressed => {},
-            }
+                ButtonState::Released => {}
+                ButtonState::Pressed => {}
+            },
         }
     }
 }

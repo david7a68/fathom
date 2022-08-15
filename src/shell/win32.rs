@@ -1,4 +1,3 @@
-
 use crate::geometry::{Extent, Point, Px};
 
 use std::{cell::RefCell, rc::Rc};
@@ -8,11 +7,11 @@ use windows::{
         Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-            GetMessageW, GetWindowLongPtrW, LoadCursorW, PeekMessageW, PostMessageW,
-            PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage,
-            CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG,
-            PM_REMOVE, SW_SHOW, WINDOW_EX_STYLE, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+            GetWindowLongPtrW, LoadCursorW, PeekMessageW, PostMessageW, PostQuitMessage,
+            RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW,
+            CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, PM_REMOVE,
+            SW_SHOW, WINDOW_EX_STYLE, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
             WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
             WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_USER, WM_WINDOWPOSCHANGED,
             WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
@@ -20,7 +19,7 @@ use windows::{
     },
 };
 
-use super::{MouseButton, ButtonState, WindowEventHandler, Proxy};
+use super::{ButtonState, MouseButton, Proxy, WindowConfig, WindowEventHandler};
 
 const WINDOW_TITLE: &str = "Hello!";
 
@@ -156,8 +155,8 @@ impl EventLoop {
         }
     }
 
-    pub fn create_window(&self, window: Box<dyn WindowEventHandler>) {
-        self.inner.create_window(window);
+    pub fn create_window(&self, config: &WindowConfig, window: Box<dyn WindowEventHandler>) {
+        self.inner.create_window(config, window);
     }
 
     /// Runs the event loop until there are no windows open.
@@ -207,12 +206,12 @@ impl Drop for EventLoop {
 struct EventLoopInner {}
 
 impl Proxy for Rc<RefCell<EventLoopInner>> {
-    fn create_window(&self, window: Box<dyn WindowEventHandler>) {
+    fn create_window(&self, config: &WindowConfig, window: Box<dyn WindowEventHandler>) {
         let hinstance = unsafe { GetModuleHandleW(None) }.unwrap();
 
         let os_title = {
             use std::{ffi::OsStr, os::windows::prelude::OsStrExt};
-            let mut buffer: Vec<u16> = OsStr::new(WINDOW_TITLE).encode_wide().collect();
+            let mut buffer: Vec<u16> = OsStr::new(config.title).encode_wide().collect();
             buffer.push(0);
             buffer
         };
@@ -223,6 +222,12 @@ impl Proxy for Rc<RefCell<EventLoopInner>> {
             extent: Extent::default(),
         }));
 
+        let (width, height) = if let Some(extent) = config.extent {
+            (extent.width.0.into(), extent.height.0.into())
+        } else {
+            (CW_USEDEFAULT, CW_USEDEFAULT)
+        };
+
         let hwnd = unsafe {
             CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
@@ -231,8 +236,8 @@ impl Proxy for Rc<RefCell<EventLoopInner>> {
                 WS_OVERLAPPEDWINDOW,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
+                width,
+                height,
                 None,
                 None,
                 hinstance,
