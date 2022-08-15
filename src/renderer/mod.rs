@@ -23,11 +23,11 @@ use crate::{
 };
 
 use self::{
-    error::Error,
     swapchain::{Swapchain, FRAMES_IN_FLIGHT},
     vertex::commands_to_vertices,
 };
 
+pub use error::Error;
 pub use vertex::Vertex;
 
 const VALIDATION_LAYER: *const i8 = b"VK_LAYER_KHRONOS_validation\0".as_ptr().cast();

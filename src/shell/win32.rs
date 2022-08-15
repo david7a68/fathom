@@ -270,7 +270,6 @@ unsafe extern "system" fn unsafe_wndproc(
         match msg {
             WM_DESTROY => {
                 std::mem::drop(Box::from_raw(window));
-                println!("destroy");
                 if Rc::strong_count(&(*window).event_loop) == 1 {
                     PostQuitMessage(0);
                 }
