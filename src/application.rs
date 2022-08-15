@@ -8,12 +8,25 @@ use crate::{
     },
 };
 
-pub use crate::shell::event_loop::WindowConfig;
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("an internal renderer error occurred")]
     Renderer(#[from] crate::renderer::Error),
+}
+
+pub struct WindowConfig<'a> {
+    pub title: &'a str,
+    pub extent: Option<Extent>,
+    pub ui_builder: &'a dyn Fn(),
+}
+
+impl<'a> WindowConfig<'a> {
+    fn shell_config(&self) -> crate::shell::event_loop::WindowConfig {
+        crate::shell::event_loop::WindowConfig {
+            title: self.title,
+            extent: self.extent,
+        }
+    }
 }
 
 pub struct Application {
@@ -31,8 +44,10 @@ impl Application {
 
     pub fn run(&mut self, windows: &[WindowConfig]) {
         for config in windows {
-            self.event_loop
-                .create_window(config, Box::new(AppWindow::new(self.renderer.clone())));
+            self.event_loop.create_window(
+                &config.shell_config(),
+                Box::new(AppWindow::new(self.renderer.clone())),
+            );
         }
 
         self.event_loop.run();
@@ -91,7 +106,9 @@ impl WindowEventHandler for AppWindow {
                         &WindowConfig {
                             title: &format!("Window #{}", Rc::strong_count(&self.renderer)),
                             extent: None,
-                        },
+                            ui_builder: &|| {},
+                        }
+                        .shell_config(),
                         Box::new(AppWindow::new(self.renderer.clone())),
                     );
                 }
