@@ -5,6 +5,9 @@ use crate::{
     renderer::{Renderer, SwapchainHandle},
     shell::event_loop::{
         ButtonState, EventLoop, MouseButton, Proxy, WindowEventHandler, WindowHandle,
+    shell::{
+        event_loop::{EventLoop, Proxy, WindowEventHandler, WindowHandle},
+        input::{ButtonState, MouseButton},
     },
 };
 
