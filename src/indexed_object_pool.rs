@@ -1,12 +1,28 @@
 use std::{marker::PhantomData, mem::MaybeUninit};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[must_use]
 pub struct RawIndex {
     pub index: u32,
     generation: u32,
 }
 
+impl RawIndex {
+    pub fn null() -> Self {
+        Self {
+            index: 0,
+            generation: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn is_null(&self) -> bool {
+        self.index == 0 && self.generation == 0
+    }
+}
+
 #[derive(Copy, Debug, Eq)]
+#[must_use]
 pub struct Index<T> {
     pub index: u32,
     generation: u32,
@@ -32,8 +48,14 @@ impl<T> Index<T> {
         }
     }
 
-    pub fn is_null(&self) -> bool {
+    #[must_use]
+    pub fn is_none(&self) -> bool {
         self.index == 0 && self.generation == 0
+    }
+
+    #[must_use]
+    pub fn is_some(&self) -> bool {
+        !self.is_none()
     }
 
     pub fn as_raw(&self) -> RawIndex {
@@ -79,7 +101,7 @@ impl<T> PartialEq for Index<T> {
 macro_rules! newtype_index {
     ($name: ident, $discriminant: ty) => {
         pub struct $name(
-            crate::indexed_store::RawIndex,
+            crate::indexed_object_pool::RawIndex,
             std::marker::PhantomData<$discriminant>,
         );
 
@@ -100,7 +122,7 @@ macro_rules! newtype_index {
         impl Default for $name {
             fn default() -> Self {
                 Self(
-                    crate::indexed_store::RawIndex::default(),
+                    crate::indexed_object_pool::RawIndex::default(),
                     std::marker::PhantomData,
                 )
             }
@@ -113,19 +135,33 @@ macro_rules! newtype_index {
         }
 
         impl $name {
+            #[must_use]
+            pub fn null() -> Self {
+                Self(
+                    crate::indexed_object_pool::RawIndex::null(),
+                    std::marker::PhantomData,
+                )
+            }
+
+            #[must_use]
+            pub fn is_null(&self) -> bool {
+                self.0.is_null()
+            }
+
+            #[must_use]
             pub fn index(&self) -> u32 {
                 self.0.index
             }
         }
 
-        impl From<crate::indexed_store::Index<$discriminant>> for $name {
+        impl From<crate::indexed_object_pool::Index<$discriminant>> for $name {
             /// Converts from an `Index` into a newtype for use.
-            fn from(index: crate::indexed_store::Index<$discriminant>) -> Self {
+            fn from(index: crate::indexed_object_pool::Index<$discriminant>) -> Self {
                 Self(index.as_raw(), std::marker::PhantomData)
             }
         }
 
-        impl From<$name> for crate::indexed_store::Index<$discriminant> {
+        impl From<$name> for crate::indexed_object_pool::Index<$discriminant> {
             /// Converts from a newtype to the `Index` base type.
             fn from(index: $name) -> Self {
                 unsafe { Self::from_raw(index.0) }
@@ -157,13 +193,14 @@ pub enum Error {
 /// - The current implementation is not thread-safe and does not guarantee fixed
 ///   pointers for values.
 #[derive(Debug)]
-pub struct IndexedStore<T> {
+#[must_use]
+pub struct IndexedObjectPool<T> {
     free_indices: Vec<u32>,
     generations: Vec<u32>,
     values: Vec<MaybeUninit<T>>,
 }
 
-impl<T> Default for IndexedStore<T> {
+impl<T> Default for IndexedObjectPool<T> {
     fn default() -> Self {
         Self {
             free_indices: vec![],
@@ -173,12 +210,13 @@ impl<T> Default for IndexedStore<T> {
     }
 }
 
-impl<T> IndexedStore<T> {
+impl<T> IndexedObjectPool<T> {
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Checks that the given index refers to a value.
+    #[must_use]
     pub fn is_valid(&self, index: impl Into<Index<T>>) -> bool {
         self.validate_invariants();
 
@@ -190,6 +228,7 @@ impl<T> IndexedStore<T> {
         }
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.free_indices.len() == self.values.len()
     }
@@ -233,6 +272,7 @@ impl<T> IndexedStore<T> {
         }
     }
 
+    #[must_use]
     pub fn get(&self, index: impl Into<Index<T>>) -> Option<&T> {
         self.validate_invariants();
 
@@ -246,6 +286,7 @@ impl<T> IndexedStore<T> {
         None
     }
 
+    #[must_use]
     pub fn get_mut(&mut self, index: impl Into<Index<T>>) -> Option<&mut T> {
         self.validate_invariants();
 
@@ -259,6 +300,7 @@ impl<T> IndexedStore<T> {
         None
     }
 
+    #[must_use]
     pub fn remove(&mut self, index: impl Into<Index<T>>) -> Option<T> {
         self.validate_invariants();
 
@@ -286,7 +328,7 @@ impl<T> IndexedStore<T> {
     }
 }
 
-impl<T> Drop for IndexedStore<T> {
+impl<T> Drop for IndexedObjectPool<T> {
     /// Drops all currently initialized values in the store and frees its
     /// backing memory.
     ///
@@ -298,7 +340,6 @@ impl<T> Drop for IndexedStore<T> {
             if let Some(last) = self.free_indices.last() {
                 if *last == index as u32 {
                     self.free_indices.pop();
-                    continue;
                 } else {
                     // SAFETY: This is safe because we're iterating solely through
                     // indices within self.values
@@ -329,7 +370,7 @@ mod tests {
 
     #[test]
     fn init() {
-        let store = IndexedStore::<u32>::new();
+        let store = IndexedObjectPool::<u32>::new();
         assert_eq!(store.values.len(), 0);
         assert_eq!(store.generations.len(), 0);
         assert_eq!(store.free_indices.len(), 0);
@@ -337,7 +378,7 @@ mod tests {
 
     #[test]
     fn alloc_valid_get() {
-        let mut store = IndexedStore::<u32>::new();
+        let mut store = IndexedObjectPool::<u32>::new();
 
         let index_1 = store.insert(0).unwrap();
         assert_eq!(store.values.len(), 1);
@@ -383,7 +424,7 @@ mod tests {
 
     #[test]
     fn alloc_remove() {
-        let mut store = IndexedStore::<u32>::new();
+        let mut store = IndexedObjectPool::<u32>::new();
 
         let index_1 = store.insert(0).unwrap();
         assert_eq!(store.remove(index_1), Some(0));
@@ -405,7 +446,7 @@ mod tests {
             }
         }
 
-        let mut store = IndexedStore::new();
+        let mut store = IndexedObjectPool::new();
 
         let dropped = Rc::new(RefCell::new(T(0)));
         assert_eq!(Rc::strong_count(&dropped), 1);
@@ -417,10 +458,10 @@ mod tests {
             let c = store.insert(dropped.clone()).unwrap();
             let d = store.insert(dropped.clone()).unwrap();
 
-            store.remove(a);
-            store.remove(b);
-            store.remove(c);
-            store.remove(d);
+            let _ = store.remove(a);
+            let _ = store.remove(b);
+            let _ = store.remove(c);
+            let _ = store.remove(d);
         }
         assert_eq!(Rc::strong_count(&dropped), 1);
 
@@ -435,10 +476,10 @@ mod tests {
             let c = store.insert(dropped.clone()).unwrap();
             let d = store.insert(dropped.clone()).unwrap();
 
-            store.remove(a);
-            store.remove(b);
-            store.remove(c);
-            store.remove(d);
+            let _ = store.remove(a);
+            let _ = store.remove(b);
+            let _ = store.remove(c);
+            let _ = store.remove(d);
         }
 
         std::mem::drop(store);

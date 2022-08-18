@@ -32,7 +32,7 @@ use super::input::{ButtonState, MouseButton};
 ///  - Allocating the trait object involves a heap allocation with its
 ///    associated costs in time and space (fragmentation).
 ///  - The amount of code required for a codebase with only one implementor of
-///    WindowEventHandler is likely similar to just using that implementor
+///    `WindowEventHandler` is likely similar to just using that implementor
 ///    directly (at the cost of increased coupling).
 pub trait WindowEventHandler {
     /// Handles initialization of any user state associated with the window.
@@ -43,7 +43,7 @@ pub trait WindowEventHandler {
     /// Return `EventReply::Continue` to continue creating the window, and
     /// `EventReply::DestroyWindow` to abort. Returning an error will cause the
     /// window to be immediately destroyed.
-    fn on_create(&mut self, window_handle: WindowHandle, control: &mut dyn Proxy);
+    fn on_create(&mut self, window_handle: WindowHandle, size: Extent, control: &mut dyn Proxy);
 
     /// Handles user-originating close requests, such as by clicking the 'X'
     /// button on the window's titlebar or by pressing 'Alt+F4'.

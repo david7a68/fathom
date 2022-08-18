@@ -19,7 +19,7 @@ use windows::Win32::{
 use crate::{
     color::Color,
     draw_command::DrawCommand,
-    indexed_store::{newtype_index, IndexedStore},
+    indexed_object_pool::{newtype_index, IndexedObjectPool},
 };
 
 use self::{
@@ -302,7 +302,7 @@ pub struct Renderer {
     os_surface_api: ash::extensions::khr::Win32Surface,
 
     device: Option<Device>,
-    swapchains: IndexedStore<(Swapchain, RenderState)>,
+    swapchains: IndexedObjectPool<(Swapchain, RenderState)>,
     pipelines: HashMap<vk::Format, pipeline::Pipeline>,
 }
 
@@ -366,7 +366,7 @@ impl Renderer {
             surface_api,
             os_surface_api,
             device: None,
-            swapchains: IndexedStore::new(),
+            swapchains: IndexedObjectPool::new(),
             pipelines: HashMap::new(),
         })
     }

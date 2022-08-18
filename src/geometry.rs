@@ -4,6 +4,7 @@
 /// It is important to note that conversions from floats always round towards 0.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[must_use]
 pub struct Px(pub i16);
 
 impl From<Px> for f32 {
@@ -51,6 +52,12 @@ impl std::ops::Sub for Px {
     }
 }
 
+impl std::ops::SubAssign for Px {
+    fn sub_assign(&mut self, other: Px) {
+        self.0 -= other.0;
+    }
+}
+
 impl std::ops::Mul<f32> for Px {
     type Output = Px;
     fn mul(self, other: f32) -> Self::Output {
@@ -65,27 +72,167 @@ impl std::ops::Mul<Px> for f32 {
     }
 }
 
+impl std::ops::Div<i16> for Px {
+    type Output = Px;
+    fn div(self, other: i16) -> Self::Output {
+        Px(self.0 / other)
+    }
+}
+
+impl std::cmp::PartialEq<i32> for Px {
+    fn eq(&self, other: &i32) -> bool {
+        self.0 as i32 == *other
+    }
+}
+
+impl std::cmp::PartialOrd<i32> for Px {
+    fn partial_cmp(&self, other: &i32) -> Option<std::cmp::Ordering> {
+        (self.0 as i32).partial_cmp(other)
+    }
+}
+
 /// A 2D point in space. It may be negative (to the left or above the top-left
 /// corner of the window) if the cursor has been captured and has left the
 /// window.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[must_use]
 pub struct Point {
     pub x: Px,
     pub y: Px,
 }
 
+impl Point {
+    pub fn zero() -> Self {
+        Self::default()
+    }
+
+    pub fn within(&self, rect: &Rect) -> bool {
+        rect.contains(*self)
+    }
+}
+
+impl std::ops::Sub<Point> for Point {
+    type Output = Offset;
+    fn sub(self, other: Point) -> Self::Output {
+        Offset {
+            x: self.x - other.x,
+            y: self.y - other.y,
+        }
+    }
+}
+
+impl std::ops::Add<Offset> for Point {
+    type Output = Self;
+    fn add(self, other: Offset) -> Self::Output {
+        Point {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+}
+
+impl std::ops::AddAssign<Offset> for Point {
+    fn add_assign(&mut self, other: Offset) {
+        self.x += other.x;
+        self.y += other.y;
+    }
+}
+
+impl std::ops::Sub<Offset> for Point {
+    type Output = Self;
+    fn sub(self, other: Offset) -> Self::Output {
+        Point {
+            x: self.x - other.x,
+            y: self.y - other.y,
+        }
+    }
+}
+
+impl std::ops::SubAssign<Offset> for Point {
+    fn sub_assign(&mut self, other: Offset) {
+        self.x -= other.x;
+        self.y -= other.y;
+    }
+}
+
 /// The size of a 2D rectangle. It is never negative.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[must_use]
+pub struct Offset {
+    pub x: Px,
+    pub y: Px,
+}
+
+impl Offset {
+    pub fn zero() -> Self {
+        Self::default()
+    }
+}
+
+impl std::ops::Add for Offset {
+    type Output = Self;
+    fn add(self, other: Self) -> Self::Output {
+        Self {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+}
+
+impl std::ops::AddAssign for Offset {
+    fn add_assign(&mut self, other: Self) {
+        self.x += other.x;
+        self.y += other.y;
+    }
+}
+
+impl std::ops::Sub for Offset {
+    type Output = Self;
+    fn sub(self, other: Self) -> Self::Output {
+        Self {
+            x: self.x - other.x,
+            y: self.y - other.y,
+        }
+    }
+}
+
+impl std::ops::SubAssign for Offset {
+    fn sub_assign(&mut self, other: Self) {
+        self.x -= other.x;
+        self.y -= other.y;
+    }
+}
+
+/// The size of a 2D rectangle. It is never negative.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[must_use]
 pub struct Extent {
     pub width: Px,
     pub height: Px,
 }
 
+impl Extent {
+    pub fn zero() -> Self {
+        Self::default()
+    }
+}
+
+impl From<Offset> for Extent {
+    fn from(offset: Offset) -> Self {
+        Extent {
+            width: offset.x,
+            height: offset.y,
+        }
+    }
+}
+
 /// A 2D rectangle. All coordinates are in pixels and may be negative (outside
 /// the window).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[must_use]
 pub struct Rect {
     pub top: Px,
     pub left: Px,
@@ -101,6 +248,10 @@ impl Rect {
             bottom: point.y + extent.height,
             right: point.x + extent.width,
         }
+    }
+
+    pub fn zero() -> Self {
+        Self::default()
     }
 
     pub fn top_left(&self) -> Point {
@@ -147,5 +298,17 @@ impl Rect {
             && point.x < self.right
             && self.top <= point.y
             && point.y <= self.bottom
+    }
+}
+
+impl std::ops::Add<Offset> for Rect {
+    type Output = Self;
+    fn add(self, other: Offset) -> Self::Output {
+        Rect {
+            top: self.top + other.y,
+            left: self.left + other.x,
+            bottom: self.bottom + other.y,
+            right: self.right + other.x,
+        }
     }
 }

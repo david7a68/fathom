@@ -4,24 +4,22 @@ use std::{cell::RefCell, rc::Rc};
 use windows::{
     core::PCWSTR,
     Win32::{
-        Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{GetLastError, HWND, LPARAM, LRESULT, RECT, WPARAM},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-            GetWindowLongPtrW, LoadCursorW, PeekMessageW, PostMessageW, PostQuitMessage,
-            RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage, CREATESTRUCTW,
-            CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG, PM_REMOVE,
-            SW_SHOW, WINDOW_EX_STYLE, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
+            GetMessageW, GetWindowLongPtrW, LoadCursorW, PeekMessageW, PostMessageW,
+            PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage,
+            CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MSG,
+            PM_REMOVE, SW_SHOW, WINDOW_EX_STYLE, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
             WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
-            WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_USER, WM_WINDOWPOSCHANGED,
-            WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+            WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_USER, WNDCLASSEXW,
+            WS_OVERLAPPEDWINDOW,
         },
     },
 };
 
 use super::{ButtonState, MouseButton, Proxy, WindowConfig, WindowEventHandler};
-
-const WINDOW_TITLE: &str = "Hello!";
 
 const UM_DESTROY_WINDOW: u32 = WM_USER + 1;
 
@@ -36,6 +34,7 @@ const WNDCLASS_NAME: &[u16] = &[
 pub struct WindowHandle(HWND);
 
 impl WindowHandle {
+    #[must_use]
     #[cfg(target_os = "windows")]
     pub fn raw(&self) -> HWND {
         self.0
@@ -61,13 +60,27 @@ impl WindowData {
     fn wndproc(&mut self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         match msg {
             WM_CREATE => {
+                let rect: RECT = {
+                    let mut rect = RECT::default();
+                    unsafe {
+                        GetClientRect(hwnd, &mut rect as *mut _);
+                    }
+                    rect
+                };
+
+                let extent = Extent {
+                    width: Px((rect.right - rect.left).try_into().unwrap()),
+                    height: Px((rect.bottom - rect.top).try_into().unwrap()),
+                };
+
                 self.event_handler
-                    .on_create(WindowHandle(hwnd), &mut self.event_loop);
+                    .on_create(WindowHandle(hwnd), extent, &mut self.event_loop);
             }
             WM_CLOSE => self.event_handler.on_close(&mut self.event_loop),
-            WM_PAINT => self
-                .event_handler
-                .on_redraw(&mut self.event_loop, self.extent),
+            WM_PAINT => {
+                self.event_handler
+                    .on_redraw(&mut self.event_loop, self.extent);
+            }
             WM_SIZE => {
                 let width = lparam.0 as i16;
                 let height = (lparam.0 >> 16) as i16;
@@ -114,7 +127,6 @@ impl WindowData {
             ),
             special_return => {
                 return match special_return {
-                    WM_WINDOWPOSCHANGED => LRESULT(0),
                     WM_ERASEBKGND => LRESULT(1),
                     _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
                 };
