@@ -113,8 +113,13 @@ impl GeometryBuffer {
             0
         );
 
-        let num_required_bytes =
-            (vertex_buffer_requirements.size + index_buffer_requirements.size).next_power_of_two();
+        let index_buffer_offset =
+            match vertex_buffer_requirements.size % index_buffer_requirements.alignment {
+                0 => vertex_buffer_requirements.size,
+                r => vertex_buffer_requirements.size + (index_buffer_requirements.alignment - r),
+            };
+
+        let num_required_bytes = index_buffer_offset + index_buffer_requirements.size;
 
         if self.size < num_required_bytes {
             unsafe { vkdevice.free_memory(self.memory, None) };
@@ -146,10 +151,10 @@ impl GeometryBuffer {
         }
 
         unsafe {
-            vkdevice.bind_buffer_memory(self.index_buffer, self.memory, vertex_buffer_size)?;
+            vkdevice.bind_buffer_memory(self.index_buffer, self.memory, index_buffer_offset)?;
             let index_memory = vkdevice.map_memory(
                 self.memory,
-                vertex_buffer_size,
+                index_buffer_offset,
                 vk::WHOLE_SIZE,
                 vk::MemoryMapFlags::empty(),
             )?;
