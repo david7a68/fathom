@@ -1,5 +1,3 @@
-use std::cell::Cell;
-
 use rand::random;
 
 use crate::{
@@ -9,16 +7,18 @@ use crate::{
     shell::input::{Event, Input},
 };
 
+use self::state::RenderState;
+
 pub trait Widget {
     fn render_state(&self) -> &RenderState;
 
     fn render_state_mut(&mut self) -> &mut RenderState;
 
-    fn for_each_child<'a>(&'a self, f: &mut dyn FnMut(&'a dyn Widget));
+    fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget));
 
     fn accept_update(&mut self, context: &mut UpdateContext) -> PostUpdate;
 
-    fn accept_layout(&self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent;
+    fn accept_layout(&mut self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent;
 
     fn accept_draw(&self, canvas: &mut Canvas, extent: Extent);
 }
@@ -67,10 +67,7 @@ impl<'a> UpdateContext<'a> {
                 // frame anyway.
             }
             PostUpdate::NeedsLayout => {
-                widget
-                    .render_state_mut()
-                    .status
-                    .set(RenderObjectStatus::NeedsLayout);
+                widget.render_state_mut().set_needs_layout();
             }
         }
     }
@@ -81,8 +78,7 @@ impl<'a> UpdateContext<'a> {
     /// Returns an empty [`Rect`] if the widget has not yet been bound to the
     /// render tree.
     pub fn bound_of(&mut self, widget: &dyn Widget) -> Rect {
-        let render_object = widget.render_state();
-        Rect::new(render_object.origin.get(), render_object.extent.get())
+        widget.render_state().rect()
     }
 }
 
@@ -90,42 +86,42 @@ impl<'a> UpdateContext<'a> {
 pub struct LayoutContext {}
 
 impl LayoutContext {
-    pub fn begin(&mut self, root: &dyn Widget, window_extent: Extent) {
-        assert!(root.render_state().offset.get() == Offset::zero());
+    pub fn begin(&mut self, root: &mut dyn Widget, window_extent: Extent) {
+        assert!(root.render_state().offset() == Offset::zero());
 
-        if root.render_state().extent.get() == window_extent {
+        if root.render_state().extent() == window_extent {
             let mut subtrees_needing_layout = vec![];
             Self::collect_subtrees_needing_layout(root, &mut subtrees_needing_layout);
 
             for subtree in subtrees_needing_layout {
-                let constraints = BoxConstraint::exact(subtree.render_state().extent.get());
+                let constraints = BoxConstraint::exact(subtree.render_state().extent());
                 let _ = self.layout(subtree, constraints);
 
-                // We don't need to position the subtree since it is explicitly
-                // required to take up exaclty the same amount of space as it
-                // did previously.
+                // Now that we have the subtree's layout, we can update the
+                // origins of its children (and they're more likely to be in
+                // cache here).
+                Self::update_origins(subtree);
             }
         } else {
             // Since this is the root widget, the origin is always 0.
             let _ = self.layout(root, BoxConstraint::exact(window_extent));
+            Self::update_origins(root);
         }
     }
 
-    pub fn layout(&mut self, widget: &dyn Widget, constraints: BoxConstraint) -> Extent {
-        let extent = widget.accept_layout(self, constraints);
-        widget.render_state().set_layout(extent, constraints);
-        extent
+    pub fn layout(&mut self, widget: &mut dyn Widget, constraints: BoxConstraint) -> Extent {
+        widget.accept_layout(self, constraints)
     }
 
-    pub fn position_widget(&mut self, widget: &dyn Widget, offset: Offset) {
-        widget.render_state().offset.set(offset);
+    pub fn position_widget(&mut self, widget: &mut dyn Widget, offset: Offset, extent: Extent) {
+        widget.render_state_mut().set_layout(offset, extent);
     }
 
     /// Recursively collect the parents of widgets that requested layout during
     /// the update phase.
     fn collect_subtrees_needing_layout<'a>(
-        widget: &'a dyn Widget,
-        buffer: &mut Vec<&'a dyn Widget>,
+        widget: &'a mut dyn Widget,
+        buffer: &mut Vec<&'a mut dyn Widget>,
     ) {
         // The most efficient way to do this is to walk the tree breadth-first and
         // find the nodes that have their status set to NeedsLayout. Their
@@ -141,12 +137,21 @@ impl LayoutContext {
         // relaid anyway so we can return immediately.
         assert!(!widget.render_state().needs_layout());
 
-        widget.for_each_child(&mut |child| {
+        widget.for_each_child_mut(&mut |child| {
             if child.render_state().needs_layout() {
                 buffer.push(child);
             } else {
                 Self::collect_subtrees_needing_layout(child, buffer);
             }
+        });
+    }
+
+    fn update_origins(widget: &mut dyn Widget) {
+        let origin = widget.render_state().origin();
+        widget.for_each_child_mut(&mut |child| {
+            let child_offset = child.render_state().offset();
+            child.render_state_mut().set_origin(origin + child_offset);
+            Self::update_origins(child);
         });
     }
 }
@@ -164,16 +169,15 @@ impl Canvas {
 
     pub fn draw(&mut self, widget: &dyn Widget) {
         let render_state = widget.render_state();
-        self.current_offset += render_state.offset.get();
+        self.current_offset += render_state.offset();
 
         // push clip bounds
 
-        render_state.origin.set(Point::zero() + self.current_offset);
-        widget.accept_draw(self, render_state.extent.get());
+        widget.accept_draw(self, render_state.extent());
 
         // pop clip bounds
 
-        self.current_offset -= render_state.offset.get();
+        self.current_offset -= render_state.offset();
     }
 
     /// Draws a colored rectangle at the given relative coordinates.
@@ -208,8 +212,8 @@ impl<W: Widget + 'static> Widget for Center<W> {
         &mut self.render_state
     }
 
-    fn for_each_child<'a>(&'a self, f: &mut dyn FnMut(&'a dyn Widget)) {
-        f(&self.child);
+    fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
+        f(&mut self.child);
     }
 
     fn accept_update(&mut self, context: &mut UpdateContext) -> PostUpdate {
@@ -217,13 +221,13 @@ impl<W: Widget + 'static> Widget for Center<W> {
         PostUpdate::NoChange
     }
 
-    fn accept_layout(&self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
-        let child_extent = context.layout(&self.child, constraints);
+    fn accept_layout(&mut self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
+        let child_extent = context.layout(&mut self.child, constraints);
         let child_offset = Offset {
             x: (constraints.max.width - child_extent.width) / 2,
             y: (constraints.max.height - child_extent.height) / 2,
         };
-        context.position_widget(&self.child, child_offset);
+        context.position_widget(&mut self.child, child_offset, child_extent);
 
         constraints.max
     }
@@ -290,8 +294,8 @@ impl<W: Widget + 'static> Widget for Column<W> {
         &mut self.render_state
     }
 
-    fn for_each_child<'a>(&'a self, f: &mut dyn FnMut(&'a dyn Widget)) {
-        for child in &self.children {
+    fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
+        for child in &mut self.children {
             f(child);
         }
     }
@@ -327,13 +331,13 @@ impl<W: Widget + 'static> Widget for Column<W> {
         }
     }
 
-    fn accept_layout(&self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
+    fn accept_layout(&mut self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
         let mut advancing_y = Px(0);
         let mut max_width = Px(0);
 
         // todo: padding-before
 
-        for child in &self.children {
+        for child in &mut self.children {
             // reduce the available height
             let child_constraints = BoxConstraint {
                 min: Extent::zero(),
@@ -350,6 +354,7 @@ impl<W: Widget + 'static> Widget for Column<W> {
                     x: Px(0),
                     y: advancing_y,
                 },
+                child_extent,
             );
 
             // advance to the next widget's position
@@ -400,7 +405,7 @@ impl Widget for Fill {
         &mut self.render_state
     }
 
-    fn for_each_child<'a>(&'a self, _: &mut dyn FnMut(&'a dyn Widget)) {}
+    fn for_each_child_mut<'a>(&'a mut self, _: &mut dyn FnMut(&'a mut dyn Widget)) {}
 
     fn accept_update(&mut self, context: &mut UpdateContext) -> PostUpdate {
         match context.event() {
@@ -417,7 +422,11 @@ impl Widget for Fill {
         }
     }
 
-    fn accept_layout(&self, _context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
+    fn accept_layout(
+        &mut self,
+        _context: &mut LayoutContext,
+        constraints: BoxConstraint,
+    ) -> Extent {
         constraints.max
     }
 
@@ -451,8 +460,8 @@ impl<W: Widget + 'static> Widget for SizedBox<W> {
         &mut self.render_state
     }
 
-    fn for_each_child<'a>(&'a self, f: &mut dyn FnMut(&'a dyn Widget)) {
-        f(&self.child);
+    fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
+        f(&mut self.child);
     }
 
     fn accept_update(&mut self, context: &mut UpdateContext) -> PostUpdate {
@@ -460,9 +469,9 @@ impl<W: Widget + 'static> Widget for SizedBox<W> {
         PostUpdate::NoChange
     }
 
-    fn accept_layout(&self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
-        let _ = context.layout(&self.child, BoxConstraint::exact(self.extent));
-        context.position_widget(&self.child, Offset::zero());
+    fn accept_layout(&mut self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
+        let _ = context.layout(&mut self.child, BoxConstraint::exact(self.extent));
+        context.position_widget(&mut self.child, Offset::zero(), self.extent);
         constraints.max_fit(self.extent)
     }
 
@@ -494,47 +503,70 @@ impl BoxConstraint {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
-#[repr(u8)]
-enum RenderObjectStatus {
-    #[default]
-    NeedsLayout,
-    Ready,
-}
+mod state {
+    use crate::geometry::{Extent, Offset, Point, Rect};
 
-#[derive(Debug, Default)]
-pub struct RenderState {
-    /// Determines if the widget needs to be laid out. This is set during the
-    /// update phase and is cleared during the layout phase.
-    status: Cell<RenderObjectStatus>,
-
-    /// The position of the widget in absolute coordinates. This is set during
-    /// the rendering phase.
-    origin: Cell<Point>,
-
-    /// The offset (relative position) of this widget's origin from its parent.
-    /// This is set during the layout phase.
-    offset: Cell<Offset>,
-
-    /// The size of the widget's bounding box. This is set during the layout
-    /// phase.
-    extent: Cell<Extent>,
-
-    /// These constraints (set during the layout phase) need to be preserved in
-    /// the case that the extent exceeds them. This might happen for example if
-    /// the widget's children exceed the constraints themselves. In this case,
-    /// it might be up to the renderer to perform clipping operations.
-    constraints: Cell<BoxConstraint>,
-}
-
-impl RenderState {
-    pub fn needs_layout(&self) -> bool {
-        self.status.get() == RenderObjectStatus::NeedsLayout
+    #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+    #[repr(u8)]
+    enum RenderObjectStatus {
+        #[default]
+        NeedsLayout,
+        Ready,
     }
 
-    fn set_layout(&self, extent: Extent, constraints: BoxConstraint) {
-        self.status.set(RenderObjectStatus::Ready);
-        self.extent.set(extent);
-        self.constraints.set(constraints);
+    #[derive(Clone, Copy, Default)]
+    struct Layout {
+        /// The offset (relative position) of this widget's origin from its parent.
+        offset: Offset,
+        /// The size of the widget's bounding box.
+        extent: Extent,
+    }
+
+    #[derive(Default)]
+    pub struct RenderState {
+        /// Determines if the widget needs to be laid out. This is set during the
+        /// update phase and is cleared during the layout phase.
+        status: RenderObjectStatus,
+
+        /// The position of the widget in absolute coordinates. This is set during
+        /// the rendering phase.
+        origin: Point,
+
+        layout: Layout,
+    }
+
+    impl RenderState {
+        pub(super) fn set_needs_layout(&mut self) {
+            self.status = RenderObjectStatus::NeedsLayout;
+        }
+
+        pub(super) fn needs_layout(&self) -> bool {
+            self.status == RenderObjectStatus::NeedsLayout
+        }
+
+        pub(super) fn offset(&self) -> Offset {
+            self.layout.offset
+        }
+
+        pub(super) fn origin(&self) -> Point {
+            self.origin
+        }
+
+        pub(super) fn extent(&self) -> Extent {
+            self.layout.extent
+        }
+
+        pub(super) fn rect(&self) -> Rect {
+            Rect::new(self.origin(), self.extent())
+        }
+
+        pub(super) fn set_origin(&mut self, origin: Point) {
+            self.origin = origin;
+        }
+
+        pub(super) fn set_layout(&mut self, offset: Offset, extent: Extent) {
+            self.status = RenderObjectStatus::Ready;
+            self.layout = Layout { offset, extent };
+        }
     }
 }

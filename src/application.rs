@@ -90,7 +90,7 @@ impl WindowEventHandler for AppWindow {
             .create_swapchain(window_handle.raw())
             .unwrap();
 
-        LayoutContext::default().begin(self.widget_tree.as_ref(), extent);
+        LayoutContext::default().begin(self.widget_tree.as_mut(), extent);
         UpdateContext::new(&self.input).update(self.widget_tree.as_mut());
     }
 
@@ -102,7 +102,7 @@ impl WindowEventHandler for AppWindow {
         self.input.tick();
 
         if window_size != Extent::zero() {
-            LayoutContext::default().begin(self.widget_tree.as_ref(), window_size);
+            LayoutContext::default().begin(self.widget_tree.as_mut(), window_size);
 
             let mut canvas = Canvas::default();
             canvas.draw(self.widget_tree.as_ref());
