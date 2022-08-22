@@ -185,21 +185,21 @@ impl Canvas {
     }
 }
 
-pub struct Center {
+pub struct Center<W: Widget + 'static> {
     render_state: RenderState,
-    pub child: Box<dyn Widget>,
+    pub child: W,
 }
 
-impl Center {
-    pub fn new<W: Widget + 'static>(child: W) -> Self {
+impl<W: Widget + 'static> Center<W> {
+    pub fn new(child: W) -> Self {
         Self {
             render_state: RenderState::default(),
-            child: Box::new(child),
+            child,
         }
     }
 }
 
-impl Widget for Center {
+impl<W: Widget + 'static> Widget for Center<W> {
     fn render_state(&self) -> &RenderState {
         &self.render_state
     }
@@ -209,39 +209,48 @@ impl Widget for Center {
     }
 
     fn for_each_child<'a>(&'a self, f: &mut dyn FnMut(&'a dyn Widget)) {
-        f(self.child.as_ref());
+        f(&self.child);
     }
 
     fn accept_update(&mut self, context: &mut UpdateContext) -> PostUpdate {
-        context.update(self.child.as_mut());
+        context.update(&mut self.child);
         PostUpdate::NoChange
     }
 
     fn accept_layout(&self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
-        let child_extent = context.layout(self.child.as_ref(), constraints);
+        let child_extent = context.layout(&self.child, constraints);
         let child_offset = Offset {
             x: (constraints.max.width - child_extent.width) / 2,
             y: (constraints.max.height - child_extent.height) / 2,
         };
-        context.position_widget(self.child.as_ref(), child_offset);
+        context.position_widget(&self.child, child_offset);
 
         constraints.max
     }
 
     fn accept_draw(&self, canvas: &mut Canvas, _extent: Extent) {
-        canvas.draw(self.child.as_ref());
+        canvas.draw(&self.child);
     }
 }
 
-pub struct Column {
+pub struct Column<W: Widget + 'static> {
     render_state: RenderState,
-    children: Vec<Box<dyn Widget>>,
+    children: Vec<W>,
     spacing: Px,
     needs_layout: bool,
 }
 
-impl Column {
-    pub fn new(children: Vec<Box<dyn Widget>>) -> Self {
+impl<W: Widget + 'static> Column<W> {
+    pub fn new() -> Self {
+        Self {
+            render_state: RenderState::default(),
+            children: Vec::new(),
+            spacing: Px(4),
+            needs_layout: false,
+        }
+    }
+
+    pub fn with_children(children: Vec<W>) -> Self {
         Self {
             render_state: RenderState::default(),
             children,
@@ -250,7 +259,12 @@ impl Column {
         }
     }
 
-    pub fn add(&mut self, child: Box<dyn Widget>) {
+    pub fn with_child(mut self, child: W) -> Self {
+        self.children.push(child);
+        self
+    }
+
+    pub fn add(&mut self, child: W) {
         self.children.push(child);
         self.needs_layout = true;
     }
@@ -261,7 +275,13 @@ impl Column {
     }
 }
 
-impl Widget for Column {
+impl<W: Widget + 'static> Default for Column<W> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<W: Widget + 'static> Widget for Column<W> {
     fn render_state(&self) -> &RenderState {
         &self.render_state
     }
@@ -272,7 +292,7 @@ impl Widget for Column {
 
     fn for_each_child<'a>(&'a self, f: &mut dyn FnMut(&'a dyn Widget)) {
         for child in &self.children {
-            f(child.as_ref());
+            f(child);
         }
     }
 
@@ -283,8 +303,8 @@ impl Widget for Column {
                 for child in &mut self.children {
                     // If the child handles the event, there's no need to pass
                     // it to the next child.
-                    if position.within(&context.bound_of(child.as_ref())) {
-                        context.update(child.as_mut());
+                    if position.within(&context.bound_of(child)) {
+                        context.update(child);
                     }
                 }
             }
@@ -292,11 +312,8 @@ impl Widget for Column {
                 for child in &mut self.children {
                     // If the child handles the event, there's no need to pass
                     // it to the next child.
-                    if context
-                        .cursor_position()
-                        .within(&context.bound_of(child.as_ref()))
-                    {
-                        context.update(child.as_mut());
+                    if context.cursor_position().within(&context.bound_of(child)) {
+                        context.update(child);
                     }
                 }
             }
@@ -326,9 +343,9 @@ impl Widget for Column {
                 },
             };
 
-            let child_extent = context.layout(child.as_ref(), child_constraints);
+            let child_extent = context.layout(child, child_constraints);
             context.position_widget(
-                child.as_ref(),
+                child,
                 Offset {
                     x: Px(0),
                     y: advancing_y,
@@ -355,7 +372,7 @@ impl Widget for Column {
 
     fn accept_draw(&self, canvas: &mut Canvas, _extent: Extent) {
         for child in &self.children {
-            canvas.draw(child.as_ref());
+            canvas.draw(child);
         }
     }
 }
@@ -409,23 +426,23 @@ impl Widget for Fill {
     }
 }
 
-pub struct SizedBox {
+pub struct SizedBox<W: Widget + 'static> {
     render_state: RenderState,
     pub extent: Extent,
-    pub child: Box<dyn Widget>,
+    pub child: W,
 }
 
-impl SizedBox {
-    pub fn new<W: Widget + 'static>(extent: Extent, child: W) -> Self {
+impl<W: Widget + 'static> SizedBox<W> {
+    pub fn new(extent: Extent, child: W) -> Self {
         Self {
             render_state: RenderState::default(),
             extent,
-            child: Box::new(child),
+            child,
         }
     }
 }
 
-impl Widget for SizedBox {
+impl<W: Widget + 'static> Widget for SizedBox<W> {
     fn render_state(&self) -> &RenderState {
         &self.render_state
     }
@@ -435,23 +452,22 @@ impl Widget for SizedBox {
     }
 
     fn for_each_child<'a>(&'a self, f: &mut dyn FnMut(&'a dyn Widget)) {
-        f(self.child.as_ref());
+        f(&self.child);
     }
 
     fn accept_update(&mut self, context: &mut UpdateContext) -> PostUpdate {
-        context.update(self.child.as_mut());
+        context.update(&mut self.child);
         PostUpdate::NoChange
     }
 
     fn accept_layout(&self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
-        let _ = context.layout(self.child.as_ref(), BoxConstraint::exact(self.extent));
-        context.position_widget(self.child.as_ref(), Offset::zero());
-
+        let _ = context.layout(&self.child, BoxConstraint::exact(self.extent));
+        context.position_widget(&self.child, Offset::zero());
         constraints.max_fit(self.extent)
     }
 
     fn accept_draw(&self, canvas: &mut Canvas, _extent: Extent) {
-        canvas.draw(self.child.as_ref());
+        canvas.draw(&self.child);
     }
 }
 
@@ -520,48 +536,5 @@ impl RenderState {
         self.status.set(RenderObjectStatus::Ready);
         self.extent.set(extent);
         self.constraints.set(constraints);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn simple() {
-        let mut tree = Center::new(Column::new(vec![
-            Box::new(SizedBox::new(
-                Extent {
-                    width: Px(100),
-                    height: Px(100),
-                },
-                Fill::new(Color::RED),
-            )),
-            Box::new(SizedBox::new(
-                Extent {
-                    width: Px(100),
-                    height: Px(100),
-                },
-                Fill::new(Color::GREEN),
-            )),
-            Box::new(SizedBox::new(
-                Extent {
-                    width: Px(100),
-                    height: Px(100),
-                },
-                Fill::new(Color::BLUE),
-            )),
-        ]));
-
-        LayoutContext::default().begin(
-            &tree,
-            Extent {
-                width: Px(1000),
-                height: Px(1000),
-            },
-        );
-
-        let input = Input::default();
-        UpdateContext::new(&input).update(&mut tree);
     }
 }

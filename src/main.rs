@@ -6,28 +6,28 @@ use fathom::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let tree = Center::new(Column::new(vec![
-        Box::new(SizedBox::new(
+    let tree = Center::new(Column::with_children(vec![
+        SizedBox::new(
             Extent {
                 width: Px(100),
                 height: Px(100),
             },
             Fill::new(Color::RED),
-        )),
-        Box::new(SizedBox::new(
+        ),
+        SizedBox::new(
             Extent {
-                width: Px(100),
+                width: Px(200),
                 height: Px(100),
             },
             Fill::new(Color::GREEN),
-        )),
-        Box::new(SizedBox::new(
+        ),
+        SizedBox::new(
             Extent {
-                width: Px(100),
+                width: Px(300),
                 height: Px(100),
             },
             Fill::new(Color::BLUE),
-        )),
+        ),
     ]));
 
     Application::new()?.run(vec![WindowConfig {
