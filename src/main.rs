@@ -7,27 +7,30 @@ use fathom::{
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tree = Center::new(Column::with_children(vec![
-        SizedBox::new(
+        Center::new(SizedBox::new(
             Extent {
                 width: Px(100),
                 height: Px(100),
             },
             Fill::new(Color::RED),
-        ),
+        ))
+        .boxed(),
         SizedBox::new(
             Extent {
                 width: Px(200),
                 height: Px(100),
             },
             Fill::new(Color::GREEN),
-        ),
+        )
+        .boxed(),
         SizedBox::new(
             Extent {
                 width: Px(300),
                 height: Px(100),
             },
             Fill::new(Color::BLUE),
-        ),
+        )
+        .boxed(),
     ]));
 
     Application::new()?.run(vec![WindowConfig {

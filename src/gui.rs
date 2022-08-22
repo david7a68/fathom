@@ -201,6 +201,10 @@ impl<W: Widget + 'static> Center<W> {
             child,
         }
     }
+
+    pub fn boxed(self) -> Box<dyn Widget> {
+        Box::new(self)
+    }
 }
 
 impl<W: Widget + 'static> Widget for Center<W> {
@@ -237,14 +241,14 @@ impl<W: Widget + 'static> Widget for Center<W> {
     }
 }
 
-pub struct Column<W: Widget + 'static> {
+pub struct Column<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> {
     render_state: RenderState,
     children: Vec<W>,
     spacing: Px,
     needs_layout: bool,
 }
 
-impl<W: Widget + 'static> Column<W> {
+impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Column<W> {
     pub fn new() -> Self {
         Self {
             render_state: RenderState::default(),
@@ -279,13 +283,13 @@ impl<W: Widget + 'static> Column<W> {
     }
 }
 
-impl<W: Widget + 'static> Default for Column<W> {
+impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Default for Column<W> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<W: Widget + 'static> Widget for Column<W> {
+impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Widget for Column<W> {
     fn render_state(&self) -> &RenderState {
         &self.render_state
     }
@@ -296,7 +300,7 @@ impl<W: Widget + 'static> Widget for Column<W> {
 
     fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
         for child in &mut self.children {
-            f(child);
+            f(child.as_mut());
         }
     }
 
@@ -307,8 +311,8 @@ impl<W: Widget + 'static> Widget for Column<W> {
                 for child in &mut self.children {
                     // If the child handles the event, there's no need to pass
                     // it to the next child.
-                    if position.within(&context.bound_of(child)) {
-                        context.update(child);
+                    if position.within(&context.bound_of(child.as_ref())) {
+                        context.update(child.as_mut());
                     }
                 }
             }
@@ -316,8 +320,8 @@ impl<W: Widget + 'static> Widget for Column<W> {
                 for child in &mut self.children {
                     // If the child handles the event, there's no need to pass
                     // it to the next child.
-                    if context.cursor_position().within(&context.bound_of(child)) {
-                        context.update(child);
+                    if context.cursor_position().within(&context.bound_of(child.as_ref())) {
+                        context.update(child.as_mut());
                     }
                 }
             }
@@ -347,9 +351,9 @@ impl<W: Widget + 'static> Widget for Column<W> {
                 },
             };
 
-            let child_extent = context.layout(child, child_constraints);
+            let child_extent = context.layout(child.as_mut(), child_constraints);
             context.position_widget(
-                child,
+                child.as_mut(),
                 Offset {
                     x: Px(0),
                     y: advancing_y,
@@ -377,7 +381,7 @@ impl<W: Widget + 'static> Widget for Column<W> {
 
     fn accept_draw(&self, canvas: &mut Canvas, _extent: Extent) {
         for child in &self.children {
-            canvas.draw(child);
+            canvas.draw(child.as_ref());
         }
     }
 }
@@ -448,6 +452,10 @@ impl<W: Widget + 'static> SizedBox<W> {
             extent,
             child,
         }
+    }
+
+    pub fn boxed(self) -> Box<Self> {
+        Box::new(self)
     }
 }
 
