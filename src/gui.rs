@@ -23,6 +23,47 @@ pub trait Widget {
     fn accept_draw(&self, canvas: &mut Canvas, extent: Extent);
 }
 
+/// Implementing [`Widget`] for `Box<dyn Widget>` permits a few nifty
+/// capabilities that are highly desirable; namely the ability to shorten static
+/// type names (and thus improve compile times of complex widget trees), and the
+/// ability to store multiple kinds of widgets within the same layout.
+/// 
+/// Naturally, this invokes a performance penalty for dynamic dispatch, but
+/// offers increased flexibility for minimal cost when used judiciously.
+/// Furthermore, there is no cost for implementing [`Widget`] for Box beyond the
+/// Box itself, since the static dispatch can be easily inlined away.
+impl Widget for Box<dyn Widget> {
+    #[inline]
+    fn render_state(&self) -> &RenderState {
+        self.as_ref().render_state()
+    }
+
+    #[inline]
+    fn render_state_mut(&mut self) -> &mut RenderState {
+        self.as_mut().render_state_mut()
+    }
+
+    #[inline]
+    fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
+        self.as_mut().for_each_child_mut(f)
+    }
+
+    #[inline]
+    fn accept_update(&mut self, context: &mut UpdateContext) -> PostUpdate {
+        self.as_mut().accept_update(context)
+    }
+
+    #[inline]
+    fn accept_layout(&mut self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
+        self.as_mut().accept_layout(context, constraints)
+    }
+
+    #[inline]
+    fn accept_draw(&self, canvas: &mut Canvas, extent: Extent) {
+        self.as_ref().accept_draw(canvas, extent);
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 #[must_use]
 pub enum PostUpdate {
@@ -105,6 +146,8 @@ impl LayoutContext {
         } else {
             // Since this is the root widget, the origin is always 0.
             let _ = self.layout(root, BoxConstraint::exact(window_extent));
+            root.render_state_mut()
+                .set_layout(Offset::zero(), window_extent);
             Self::update_origins(root);
         }
     }
@@ -241,14 +284,14 @@ impl<W: Widget + 'static> Widget for Center<W> {
     }
 }
 
-pub struct Column<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> {
+pub struct Column<W: Widget> {
     render_state: RenderState,
     children: Vec<W>,
     spacing: Px,
     needs_layout: bool,
 }
 
-impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Column<W> {
+impl<W: Widget> Column<W> {
     pub fn new() -> Self {
         Self {
             render_state: RenderState::default(),
@@ -283,13 +326,13 @@ impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Column<W> {
     }
 }
 
-impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Default for Column<W> {
+impl<W: Widget> Default for Column<W> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Widget for Column<W> {
+impl<W: Widget> Widget for Column<W> {
     fn render_state(&self) -> &RenderState {
         &self.render_state
     }
@@ -300,7 +343,7 @@ impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Widget for Column<W> {
 
     fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
         for child in &mut self.children {
-            f(child.as_mut());
+            f(child);
         }
     }
 
@@ -311,8 +354,8 @@ impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Widget for Column<W> {
                 for child in &mut self.children {
                     // If the child handles the event, there's no need to pass
                     // it to the next child.
-                    if position.within(&context.bound_of(child.as_ref())) {
-                        context.update(child.as_mut());
+                    if position.within(&context.bound_of(child)) {
+                        context.update(child);
                     }
                 }
             }
@@ -320,8 +363,8 @@ impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Widget for Column<W> {
                 for child in &mut self.children {
                     // If the child handles the event, there's no need to pass
                     // it to the next child.
-                    if context.cursor_position().within(&context.bound_of(child.as_ref())) {
-                        context.update(child.as_mut());
+                    if context.cursor_position().within(&context.bound_of(child)) {
+                        context.update(child);
                     }
                 }
             }
@@ -351,15 +394,18 @@ impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Widget for Column<W> {
                 },
             };
 
-            let child_extent = context.layout(child.as_mut(), child_constraints);
+            let child_extent = context.layout(child, child_constraints);
             context.position_widget(
-                child.as_mut(),
+                child,
                 Offset {
                     x: Px(0),
                     y: advancing_y,
                 },
                 child_extent,
             );
+
+            println!("advancing_y: {:?}", advancing_y);
+            println!("child extent: {:?}", child_extent);
 
             // advance to the next widget's position
             advancing_y += child_extent.height + self.spacing;
@@ -381,7 +427,7 @@ impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Widget for Column<W> {
 
     fn accept_draw(&self, canvas: &mut Canvas, _extent: Extent) {
         for child in &self.children {
-            canvas.draw(child.as_ref());
+            canvas.draw(child);
         }
     }
 }
@@ -439,13 +485,13 @@ impl Widget for Fill {
     }
 }
 
-pub struct SizedBox<W: Widget + 'static> {
+pub struct SizedBox<W: Widget> {
     render_state: RenderState,
     pub extent: Extent,
     pub child: W,
 }
 
-impl<W: Widget + 'static> SizedBox<W> {
+impl<W: Widget> SizedBox<W> {
     pub fn new(extent: Extent, child: W) -> Self {
         Self {
             render_state: RenderState::default(),
@@ -459,7 +505,7 @@ impl<W: Widget + 'static> SizedBox<W> {
     }
 }
 
-impl<W: Widget + 'static> Widget for SizedBox<W> {
+impl<W: Widget> Widget for SizedBox<W> {
     fn render_state(&self) -> &RenderState {
         &self.render_state
     }
@@ -477,10 +523,14 @@ impl<W: Widget + 'static> Widget for SizedBox<W> {
         PostUpdate::NoChange
     }
 
-    fn accept_layout(&mut self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
+    fn accept_layout(
+        &mut self,
+        context: &mut LayoutContext,
+        _constraints: BoxConstraint,
+    ) -> Extent {
         let _ = context.layout(&mut self.child, BoxConstraint::exact(self.extent));
         context.position_widget(&mut self.child, Offset::zero(), self.extent);
-        constraints.max_fit(self.extent)
+        self.extent
     }
 
     fn accept_draw(&self, canvas: &mut Canvas, _extent: Extent) {
