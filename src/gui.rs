@@ -10,9 +10,9 @@ use crate::{
 use self::state::RenderState;
 
 pub trait Widget {
-    fn widget_state(&self) -> &WidgetState;
+    fn render_state(&self) -> &RenderState;
 
-    fn widget_state_mut(&mut self) -> &mut WidgetState;
+    fn render_state_mut(&mut self) -> &mut RenderState;
 
     fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget));
 
@@ -135,7 +135,7 @@ impl LayoutContext {
         // hierarchy and the window was resized. Since the root widget needs
         // to be laid out again, all of its descendants will need to be
         // relaid anyway so we can return immediately.
-        assert!(!widget.widget_state().layout().is_dirty());
+        assert!(!widget.render_state().needs_layout());
 
         widget.for_each_child_mut(&mut |child| {
             if child.render_state().needs_layout() {
@@ -212,7 +212,7 @@ impl<W: Widget + 'static> Widget for Center<W> {
         &self.render_state
     }
 
-    fn widget_state_mut(&mut self) -> &mut WidgetState {
+    fn render_state_mut(&mut self) -> &mut RenderState {
         &mut self.render_state
     }
 
@@ -260,7 +260,7 @@ impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Column<W> {
 
     pub fn with_children(children: Vec<W>) -> Self {
         Self {
-            render_state: WidgetState::default(),
+            render_state: RenderState::default(),
             children,
             spacing: Px(4),
             needs_layout: false,
@@ -294,7 +294,7 @@ impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Widget for Column<W> {
         &self.render_state
     }
 
-    fn widget_state_mut(&mut self) -> &mut WidgetState {
+    fn render_state_mut(&mut self) -> &mut RenderState {
         &mut self.render_state
     }
 
@@ -387,25 +387,25 @@ impl<W: AsRef<dyn Widget> + AsMut<dyn Widget> + 'static> Widget for Column<W> {
 }
 
 pub struct Fill {
-    render_state: WidgetState,
+    render_state: RenderState,
     pub color: Color,
 }
 
 impl Fill {
     pub fn new(color: Color) -> Self {
         Self {
-            render_state: WidgetState::default(),
+            render_state: RenderState::default(),
             color,
         }
     }
 }
 
 impl Widget for Fill {
-    fn widget_state(&self) -> &WidgetState {
+    fn render_state(&self) -> &RenderState {
         &self.render_state
     }
 
-    fn widget_state_mut(&mut self) -> &mut WidgetState {
+    fn render_state_mut(&mut self) -> &mut RenderState {
         &mut self.render_state
     }
 
@@ -448,7 +448,7 @@ pub struct SizedBox<W: Widget + 'static> {
 impl<W: Widget + 'static> SizedBox<W> {
     pub fn new(extent: Extent, child: W) -> Self {
         Self {
-            render_state: WidgetState::default(),
+            render_state: RenderState::default(),
             extent,
             child,
         }
@@ -464,7 +464,7 @@ impl<W: Widget + 'static> Widget for SizedBox<W> {
         &self.render_state
     }
 
-    fn widget_state_mut(&mut self) -> &mut WidgetState {
+    fn render_state_mut(&mut self) -> &mut RenderState {
         &mut self.render_state
     }
 
