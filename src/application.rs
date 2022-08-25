@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use crate::{
     color::Color,
     geometry::{Extent, Point},
-    gui::{Canvas, LayoutContext, UpdateContext, Widget},
+    gui::widgets::{Canvas, LayoutContext, UpdateContext, Widget},
     renderer::{Renderer, SwapchainHandle},
     shell::{
         event_loop::{EventLoop, Proxy, WindowEventHandler, WindowHandle},

@@ -2,7 +2,10 @@ use fathom::{
     application::{Application, WindowConfig},
     color::Color,
     geometry::{Extent, Px},
-    gui::{Center, Column, Fill, SizedBox},
+    gui::widgets::{
+        debug::Fill,
+        layout::{Center, Column, SizedBox},
+    },
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
