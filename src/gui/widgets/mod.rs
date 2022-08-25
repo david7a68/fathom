@@ -8,8 +8,6 @@ use crate::{
     shell::input::{Event, Input},
 };
 
-use self::state::WidgetState;
-
 pub trait Widget {
     fn widget_state(&self) -> &WidgetState;
 
@@ -256,70 +254,66 @@ impl BoxConstraint {
     }
 }
 
-mod state {
-    use crate::geometry::{Extent, Offset, Point, Rect};
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+#[repr(u8)]
+enum RenderObjectStatus {
+    #[default]
+    NeedsLayout,
+    Ready,
+}
 
-    #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
-    #[repr(u8)]
-    enum RenderObjectStatus {
-        #[default]
-        NeedsLayout,
-        Ready,
+#[derive(Clone, Copy, Default)]
+struct Layout {
+    /// The offset (relative position) of this widget's origin from its parent.
+    offset: Offset,
+    /// The size of the widget's bounding box.
+    extent: Extent,
+}
+
+#[derive(Default)]
+pub struct WidgetState {
+    /// Determines if the widget needs to be laid out. This is set during the
+    /// update phase and is cleared during the layout phase.
+    status: RenderObjectStatus,
+
+    /// The position of the widget in absolute coordinates. This is set during
+    /// the rendering phase.
+    origin: Point,
+
+    layout: Layout,
+}
+
+impl WidgetState {
+    fn set_needs_layout(&mut self) {
+        self.status = RenderObjectStatus::NeedsLayout;
     }
 
-    #[derive(Clone, Copy, Default)]
-    struct Layout {
-        /// The offset (relative position) of this widget's origin from its parent.
-        offset: Offset,
-        /// The size of the widget's bounding box.
-        extent: Extent,
+    fn needs_layout(&self) -> bool {
+        self.status == RenderObjectStatus::NeedsLayout
     }
 
-    #[derive(Default)]
-    pub struct WidgetState {
-        /// Determines if the widget needs to be laid out. This is set during the
-        /// update phase and is cleared during the layout phase.
-        status: RenderObjectStatus,
-
-        /// The position of the widget in absolute coordinates. This is set during
-        /// the rendering phase.
-        origin: Point,
-
-        layout: Layout,
+    fn offset(&self) -> Offset {
+        self.layout.offset
     }
 
-    impl WidgetState {
-        pub(super) fn set_needs_layout(&mut self) {
-            self.status = RenderObjectStatus::NeedsLayout;
-        }
+    fn origin(&self) -> Point {
+        self.origin
+    }
 
-        pub(super) fn needs_layout(&self) -> bool {
-            self.status == RenderObjectStatus::NeedsLayout
-        }
+    fn extent(&self) -> Extent {
+        self.layout.extent
+    }
 
-        pub(super) fn offset(&self) -> Offset {
-            self.layout.offset
-        }
+    fn rect(&self) -> Rect {
+        Rect::new(self.origin(), self.extent())
+    }
 
-        pub(super) fn origin(&self) -> Point {
-            self.origin
-        }
+    fn set_origin(&mut self, origin: Point) {
+        self.origin = origin;
+    }
 
-        pub(super) fn extent(&self) -> Extent {
-            self.layout.extent
-        }
-
-        pub(super) fn rect(&self) -> Rect {
-            Rect::new(self.origin(), self.extent())
-        }
-
-        pub(super) fn set_origin(&mut self, origin: Point) {
-            self.origin = origin;
-        }
-
-        pub(super) fn set_layout(&mut self, offset: Offset, extent: Extent) {
-            self.status = RenderObjectStatus::Ready;
-            self.layout = Layout { offset, extent };
-        }
+    fn set_layout(&mut self, offset: Offset, extent: Extent) {
+        self.status = RenderObjectStatus::Ready;
+        self.layout = Layout { offset, extent };
     }
 }
