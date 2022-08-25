@@ -7,12 +7,12 @@ use crate::{
     shell::input::{Event, Input},
 };
 
-use self::state::RenderState;
+use self::state::WidgetState;
 
 pub trait Widget {
-    fn render_state(&self) -> &RenderState;
+    fn widget_state(&self) -> &WidgetState;
 
-    fn render_state_mut(&mut self) -> &mut RenderState;
+    fn widget_state_mut(&mut self) -> &mut WidgetState;
 
     fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget));
 
@@ -34,13 +34,13 @@ pub trait Widget {
 /// Box itself, since the static dispatch can be easily inlined away.
 impl Widget for Box<dyn Widget> {
     #[inline]
-    fn render_state(&self) -> &RenderState {
-        self.as_ref().render_state()
+    fn widget_state(&self) -> &WidgetState {
+        self.as_ref().widget_state()
     }
 
     #[inline]
-    fn render_state_mut(&mut self) -> &mut RenderState {
-        self.as_mut().render_state_mut()
+    fn widget_state_mut(&mut self) -> &mut WidgetState {
+        self.as_mut().widget_state_mut()
     }
 
     #[inline]
@@ -108,7 +108,7 @@ impl<'a> UpdateContext<'a> {
                 // frame anyway.
             }
             PostUpdate::NeedsLayout => {
-                widget.render_state_mut().set_needs_layout();
+                widget.widget_state_mut().set_needs_layout();
             }
         }
     }
@@ -119,7 +119,7 @@ impl<'a> UpdateContext<'a> {
     /// Returns an empty [`Rect`] if the widget has not yet been bound to the
     /// render tree.
     pub fn bound_of(&mut self, widget: &dyn Widget) -> Rect {
-        widget.render_state().rect()
+        widget.widget_state().rect()
     }
 }
 
@@ -128,14 +128,14 @@ pub struct LayoutContext {}
 
 impl LayoutContext {
     pub fn begin(&mut self, root: &mut dyn Widget, window_extent: Extent) {
-        assert!(root.render_state().offset() == Offset::zero());
+        assert!(root.widget_state().offset() == Offset::zero());
 
-        if root.render_state().extent() == window_extent {
+        if root.widget_state().extent() == window_extent {
             let mut subtrees_needing_layout = vec![];
             Self::collect_subtrees_needing_layout(root, &mut subtrees_needing_layout);
 
             for subtree in subtrees_needing_layout {
-                let constraints = BoxConstraint::exact(subtree.render_state().extent());
+                let constraints = BoxConstraint::exact(subtree.widget_state().extent());
                 let _ = self.layout(subtree, constraints);
 
                 // Now that we have the subtree's layout, we can update the
@@ -146,7 +146,7 @@ impl LayoutContext {
         } else {
             // Since this is the root widget, the origin is always 0.
             let _ = self.layout(root, BoxConstraint::exact(window_extent));
-            root.render_state_mut()
+            root.widget_state_mut()
                 .set_layout(Offset::zero(), window_extent);
             Self::update_origins(root);
         }
@@ -157,7 +157,7 @@ impl LayoutContext {
     }
 
     pub fn position_widget(&mut self, widget: &mut dyn Widget, offset: Offset, extent: Extent) {
-        widget.render_state_mut().set_layout(offset, extent);
+        widget.widget_state_mut().set_layout(offset, extent);
     }
 
     /// Recursively collect the parents of widgets that requested layout during
@@ -178,10 +178,10 @@ impl LayoutContext {
         // hierarchy and the window was resized. Since the root widget needs
         // to be laid out again, all of its descendants will need to be
         // relaid anyway so we can return immediately.
-        assert!(!widget.render_state().needs_layout());
+        assert!(!widget.widget_state().needs_layout());
 
         widget.for_each_child_mut(&mut |child| {
-            if child.render_state().needs_layout() {
+            if child.widget_state().needs_layout() {
                 buffer.push(child);
             } else {
                 Self::collect_subtrees_needing_layout(child, buffer);
@@ -190,10 +190,10 @@ impl LayoutContext {
     }
 
     fn update_origins(widget: &mut dyn Widget) {
-        let origin = widget.render_state().origin();
+        let origin = widget.widget_state().origin();
         widget.for_each_child_mut(&mut |child| {
-            let child_offset = child.render_state().offset();
-            child.render_state_mut().set_origin(origin + child_offset);
+            let child_offset = child.widget_state().offset();
+            child.widget_state_mut().set_origin(origin + child_offset);
             Self::update_origins(child);
         });
     }
@@ -211,16 +211,16 @@ impl Canvas {
     }
 
     pub fn draw(&mut self, widget: &dyn Widget) {
-        let render_state = widget.render_state();
-        self.current_offset += render_state.offset();
+        let widget_state = widget.widget_state();
+        self.current_offset += widget_state.offset();
 
         // push clip bounds
 
-        widget.accept_draw(self, render_state.extent());
+        widget.accept_draw(self, widget_state.extent());
 
         // pop clip bounds
 
-        self.current_offset -= render_state.offset();
+        self.current_offset -= widget_state.offset();
     }
 
     /// Draws a colored rectangle at the given relative coordinates.
@@ -233,14 +233,14 @@ impl Canvas {
 }
 
 pub struct Center<W: Widget + 'static> {
-    render_state: RenderState,
+    widget_state: WidgetState,
     pub child: W,
 }
 
 impl<W: Widget + 'static> Center<W> {
     pub fn new(child: W) -> Self {
         Self {
-            render_state: RenderState::default(),
+            widget_state: WidgetState::default(),
             child,
         }
     }
@@ -251,12 +251,12 @@ impl<W: Widget + 'static> Center<W> {
 }
 
 impl<W: Widget + 'static> Widget for Center<W> {
-    fn render_state(&self) -> &RenderState {
-        &self.render_state
+    fn widget_state(&self) -> &WidgetState {
+        &self.widget_state
     }
 
-    fn render_state_mut(&mut self) -> &mut RenderState {
-        &mut self.render_state
+    fn widget_state_mut(&mut self) -> &mut WidgetState {
+        &mut self.widget_state
     }
 
     fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
@@ -285,7 +285,7 @@ impl<W: Widget + 'static> Widget for Center<W> {
 }
 
 pub struct Column<W: Widget> {
-    render_state: RenderState,
+    widget_state: WidgetState,
     children: Vec<W>,
     spacing: Px,
     needs_layout: bool,
@@ -294,7 +294,7 @@ pub struct Column<W: Widget> {
 impl<W: Widget> Column<W> {
     pub fn new() -> Self {
         Self {
-            render_state: RenderState::default(),
+            widget_state: WidgetState::default(),
             children: Vec::new(),
             spacing: Px(4),
             needs_layout: false,
@@ -303,7 +303,7 @@ impl<W: Widget> Column<W> {
 
     pub fn with_children(children: Vec<W>) -> Self {
         Self {
-            render_state: RenderState::default(),
+            widget_state: WidgetState::default(),
             children,
             spacing: Px(4),
             needs_layout: false,
@@ -333,12 +333,12 @@ impl<W: Widget> Default for Column<W> {
 }
 
 impl<W: Widget> Widget for Column<W> {
-    fn render_state(&self) -> &RenderState {
-        &self.render_state
+    fn widget_state(&self) -> &WidgetState {
+        &self.widget_state
     }
 
-    fn render_state_mut(&mut self) -> &mut RenderState {
-        &mut self.render_state
+    fn widget_state_mut(&mut self) -> &mut WidgetState {
+        &mut self.widget_state
     }
 
     fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
@@ -433,26 +433,26 @@ impl<W: Widget> Widget for Column<W> {
 }
 
 pub struct Fill {
-    render_state: RenderState,
+    widget_state: WidgetState,
     pub color: Color,
 }
 
 impl Fill {
     pub fn new(color: Color) -> Self {
         Self {
-            render_state: RenderState::default(),
+            widget_state: WidgetState::default(),
             color,
         }
     }
 }
 
 impl Widget for Fill {
-    fn render_state(&self) -> &RenderState {
-        &self.render_state
+    fn widget_state(&self) -> &WidgetState {
+        &self.widget_state
     }
 
-    fn render_state_mut(&mut self) -> &mut RenderState {
-        &mut self.render_state
+    fn widget_state_mut(&mut self) -> &mut WidgetState {
+        &mut self.widget_state
     }
 
     fn for_each_child_mut<'a>(&'a mut self, _: &mut dyn FnMut(&'a mut dyn Widget)) {}
@@ -486,7 +486,7 @@ impl Widget for Fill {
 }
 
 pub struct SizedBox<W: Widget> {
-    render_state: RenderState,
+    widget_state: WidgetState,
     pub extent: Extent,
     pub child: W,
 }
@@ -494,7 +494,7 @@ pub struct SizedBox<W: Widget> {
 impl<W: Widget> SizedBox<W> {
     pub fn new(extent: Extent, child: W) -> Self {
         Self {
-            render_state: RenderState::default(),
+            widget_state: WidgetState::default(),
             extent,
             child,
         }
@@ -506,12 +506,12 @@ impl<W: Widget> SizedBox<W> {
 }
 
 impl<W: Widget> Widget for SizedBox<W> {
-    fn render_state(&self) -> &RenderState {
-        &self.render_state
+    fn widget_state(&self) -> &WidgetState {
+        &self.widget_state
     }
 
-    fn render_state_mut(&mut self) -> &mut RenderState {
-        &mut self.render_state
+    fn widget_state_mut(&mut self) -> &mut WidgetState {
+        &mut self.widget_state
     }
 
     fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
@@ -581,7 +581,7 @@ mod state {
     }
 
     #[derive(Default)]
-    pub struct RenderState {
+    pub struct WidgetState {
         /// Determines if the widget needs to be laid out. This is set during the
         /// update phase and is cleared during the layout phase.
         status: RenderObjectStatus,
@@ -593,7 +593,7 @@ mod state {
         layout: Layout,
     }
 
-    impl RenderState {
+    impl WidgetState {
         pub(super) fn set_needs_layout(&mut self) {
             self.status = RenderObjectStatus::NeedsLayout;
         }
