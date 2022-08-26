@@ -1,5 +1,6 @@
 pub mod debug;
 pub mod layout;
+pub mod tabbed_panel;
 
 use crate::{
     color::Color,
