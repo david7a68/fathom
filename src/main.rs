@@ -3,10 +3,35 @@ use fathom::{
     color::Color,
     gui::widgets::{
         debug::Fill,
+        split_panel::{Axis, SplitPanel},
+        tabbed_panel::TabbedPanel,
+        Widget,
     },
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let tree = SplitPanel::<Box<dyn Widget>>::with_children(
+        Axis::X,
+        vec![
+            Box::new(Fill::new(Color::GREEN)),
+            Box::new(SplitPanel::with_children(
+                Axis::Y,
+                vec![
+                    TabbedPanel::with_children(vec![
+                        Fill::new(Color::RED),
+                        Fill::new(Color::BLUE),
+                        Fill::new(Color::WHITE),
+                    ]),
+                    TabbedPanel::with_children(vec![
+                        Fill::new(Color::RED),
+                        Fill::new(Color::BLUE),
+                        Fill::new(Color::WHITE),
+                    ]),
+                ],
+            )),
+            Box::new(Fill::new(Color::WHITE)),
+        ],
+    );
 
     Application::new()?.run(vec![WindowConfig {
         title: "Window #1",
@@ -16,82 +41,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-
-/*
-Layout::Center {}
-*/
-
-// fn ui_builder(pool: &mut ContainerPool) -> ContainerId {
-//     /*
-//     pool.make(Container::Fill(Color::BLUE))
-//         .add_child(|p| p.make(Container::LayoutCenter {})
-//             .add_child(|p| p.make(Container::Box {
-//                 extent: Extent {
-//                     width: Px(100),
-//                     height: Px(100),
-//                 },
-//             }
-//         ))
-//     );
-//     */
-//     /*
-//     {
-//         "type": "fill",
-//         "color": "blue",
-//         "children": {
-//             "type": "layout_center",
-//             "children": {
-//                 "type": "box",
-//                 "extent": {
-//                     "width": 100,
-//                     "height": 100,
-//                 },
-//             },
-//         },
-//     },
-//     */
-//     /*
-//     <fill color="blue">
-//         <layout_center>
-//             <box extent="100 100"/>
-//         </layout_center>
-//     </fill>
-//     */
-//     /*
-//     widget_tree!{
-//         pool,
-//         fill color=Color::BLUE on_click=|f| { f.color = random() } {
-//             layout_center axis=xy {
-//                 box extent="100 100"
-//             }
-//         }
-//     };
-//     */
-//     /*
-//     arena.make::<XSplitPanel>(|c| {
-//         c.add_child::<FillColor>().on_click(|this, _| this.color = random());
-//         c.add_child::<YSplitPanel>(|c| {
-//             c.add_child::<FillColor>().on_click(|this, _|, this.color = random());
-//             c.add_child::<FillColor>().on_click(|this, _| this.color = random());
-//         });
-//     })
-//     */
-//     /*
-//     arena.make_auto::<XSplitPanel>([
-//         arena.make::<FillColor>(),
-//         arena.make_auto::<YSplitPanel>([
-//             arena.make::<FillColor>(),
-//             arena.make::<FillColor>(),
-//         ]),
-//     ])
-//     */
-//     /*
-//     XSPlitPanel::auto([
-//         FillColor::new(),
-//         YSplitPanel::auto([
-//             FillColor::new(),
-//             FillColor::new(),
-//         ]),
-//     ])
-//     */
-// }

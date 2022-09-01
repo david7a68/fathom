@@ -1,72 +1,54 @@
-//! This module defines a multi-panel widget with tabs (think editor tabs in
-//! VSCode).
-
-use std::num::NonZeroU8;
+use rand::random;
 
 use crate::{
-    geometry::{Extent, Point, Rect},
-    shell::input::Event,
+    color::Color,
+    geometry::{Extent, Offset, Px, Rect},
+    shell::input::{ButtonState, Event, MouseButton},
 };
 
 use super::{BoxConstraint, Canvas, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState};
 
-/// A hierarchy of split panels; the leaves of which contain tabs that may be
-/// dragged between panels.
-///
-/// Todo:
-///
-///  - [ ] Implement Widget (basic)
-///    - [ ] Draw plain background
-///    - [ ] Draw hardcoded panels
-///    - [ ] Identify when a cursor is hovering over the edge between two panels
-///    - [ ] Draw a colored rect over the hover area
-///    - [ ] Handle dragging the hover area
+const TAB_BAR_HEIGHT: Px = Px(10);
+const TAB_WIDTH: Px = Px(30);
+
 pub struct TabbedPanel<W: Widget> {
     state: WidgetState,
-    node: Vec<Node>,
-    widgets: Vec<W>,
+    children: Vec<Tab<W>>,
+    active: usize,
 }
 
 impl<W: Widget> TabbedPanel<W> {
-    pub fn new(default: W) -> Self {
+    pub fn with_children(mut children: Vec<W>) -> Self {
         Self {
             state: WidgetState::default(),
-            node: vec![Node {
-                prev: None,
-                next: None,
-                bounds: Rect::zero(),
-                state: State::Leaf { widget: 0 },
-            }],
-            widgets: vec![default],
+            children: children
+                .drain(..)
+                .map(|c| Tab {
+                    width: TAB_WIDTH,
+                    widget: c,
+                    color: random(),
+                })
+                .collect(),
+            active: 0,
         }
     }
 
-    fn smallest_pane_containing(&self, point: Point) -> u8 {
-        fn recurse(nodes: &[Node], node: &Node, idx: usize, point: Point) -> usize {
-            match node.state {
-                State::Leaf { .. } => idx,
-                State::FixedInner { first, .. } | State::AutoInner { first, .. } => {
-                    let mut child_index = Some(first);
-                    while let Some(child_idx) = child_index.map(|i| i.get() as usize) {
-                        let child = &nodes[child_idx];
-                        if child.bounds.contains(point) {
-                            return recurse(nodes, child, child_idx, point);
-                        } else {
-                            child_index = child.next;
-                        }
-                    }
-
-                    panic!(
-                        "inner pane ({}) contains point {:?} but none of its children do",
-                        idx, point
-                    );
-                }
-            }
+    fn tab_bar_rect(&self, bounds: Rect) -> Rect {
+        Rect {
+            left: bounds.left,
+            right: bounds.right,
+            top: bounds.top,
+            bottom: bounds.top + TAB_BAR_HEIGHT,
         }
+    }
 
-        recurse(&self.node, &self.node[0], 0, point)
-            .try_into()
-            .unwrap()
+    fn content_rect(&self, bounds: Rect) -> Rect {
+        Rect {
+            left: bounds.left,
+            right: bounds.right,
+            top: bounds.top + TAB_BAR_HEIGHT,
+            bottom: bounds.bottom,
+        }
     }
 }
 
@@ -80,73 +62,95 @@ impl<W: Widget> Widget for TabbedPanel<W> {
     }
 
     fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
-        for widget in &mut self.widgets {
-            f(widget)
+        for child in &mut self.children {
+            f(&mut child.widget)
         }
     }
 
     fn accept_update(&mut self, context: &mut UpdateContext) -> PostUpdate {
+        let rect = context.bound_of(self);
+
         match context.event() {
-            Event::None => {}
-            Event::CursorMove { .. } | Event::MouseButton { .. } => {
-                let point = context.cursor_position();
-                if context.bound_of(self).contains(point) {
-                    let pane = &self.node[self.smallest_pane_containing(point) as usize];
-                    // todo: set focus on MouseButton
-                    if let State::Leaf { widget } = pane.state {
-                        context.update(&mut self.widgets[widget as usize])
-                    } else {
-                        unreachable!()
+            Event::None => PostUpdate::NoChange,
+            Event::CursorMove { position } => {
+                if self.content_rect(rect).contains(position) {
+                    context.update(&mut self.children[self.active].widget);
+                }
+
+                PostUpdate::NoChange
+            }
+            Event::MouseButton { button, state } => {
+                let cursor_pos = context.cursor_position();
+
+                if self.tab_bar_rect(rect).contains(cursor_pos) {
+                    let cursor_x = cursor_pos.x;
+                    let mut advancing_x = rect.left;
+                    for (i, child) in self.children.iter_mut().enumerate() {
+                        advancing_x += child.width;
+                        if cursor_x <= advancing_x {
+                            if button == MouseButton::Left && state == ButtonState::Pressed {
+                                self.active = i;
+                                return PostUpdate::NeedsLayout;
+                            }
+
+                            break;
+                        }
                     }
+
+                    PostUpdate::NoChange
+                } else if self.content_rect(rect).contains(cursor_pos) {
+                    context.update(&mut self.children[self.active].widget);
+                    PostUpdate::NoChange
+                } else {
+                    PostUpdate::NoChange
                 }
             }
         }
-
-        PostUpdate::NoChange
     }
 
     fn accept_layout(&mut self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent {
-        // todo: compute child layouts
+        let child_constraints = BoxConstraint::exact(Extent {
+            width: constraints.max.width,
+            height: constraints.max.height - TAB_BAR_HEIGHT,
+        });
+
+        let child_extent =
+            context.layout(&mut self.children[self.active].widget, child_constraints);
+
+        context.position_widget(
+            &mut self.children[self.active].widget,
+            Offset {
+                x: Px(0),
+                y: TAB_BAR_HEIGHT,
+            },
+            child_extent,
+        );
 
         constraints.max
     }
 
-    fn accept_draw(&self, canvas: &mut Canvas, extent: Extent) {
-        // for each widget, draw
+    fn accept_draw(&self, canvas: &mut Canvas, _extent: Extent) {
+        let mut advancing_x = Px(0);
+        for child in &self.children {
+            canvas.fill_rect(
+                Rect {
+                    left: advancing_x,
+                    right: advancing_x + child.width,
+                    top: Px(0),
+                    bottom: TAB_BAR_HEIGHT,
+                },
+                child.color,
+            );
+
+            advancing_x += child.width;
+        }
+
+        canvas.draw(&self.children[self.active].widget);
     }
 }
 
-#[repr(u8)]
-#[derive(Debug, Default, PartialEq, Eq)]
-enum Mode {
-    #[default]
-    Undefined,
-    AutoX,
-    AutoY,
-    FixedX,
-    FixedY,
-}
-
-struct Node {
-    prev: Option<NonZeroU8>,
-    next: Option<NonZeroU8>,
-    bounds: Rect,
-    state: State,
-}
-
-enum State {
-    Leaf {
-        widget: u8,
-    },
-    FixedInner {
-        first: NonZeroU8,
-        last: NonZeroU8,
-        layout_mode: Mode,
-        percent_of_parent: f32,
-    },
-    AutoInner {
-        first: NonZeroU8,
-        last: NonZeroU8,
-        layout_mode: Mode,
-    },
+struct Tab<W: Widget> {
+    width: Px,
+    color: Color,
+    widget: W,
 }
