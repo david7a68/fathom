@@ -79,6 +79,13 @@ impl std::ops::Div<i16> for Px {
     }
 }
 
+impl std::ops::Rem<i16> for Px {
+    type Output = Px;
+    fn rem(self, rhs: i16) -> Self::Output {
+        Px(self.0 % rhs)
+    }
+}
+
 impl std::cmp::PartialEq<i32> for Px {
     fn eq(&self, other: &i32) -> bool {
         self.0 as i32 == *other

@@ -17,10 +17,6 @@ impl<W: Widget + 'static> Center<W> {
             child,
         }
     }
-
-    pub fn boxed(self) -> Box<dyn Widget> {
-        Box::new(self)
-    }
 }
 
 impl<W: Widget + 'static> Widget for Center<W> {
@@ -218,10 +214,6 @@ impl<W: Widget> SizedBox<W> {
             extent,
             child,
         }
-    }
-
-    pub fn boxed(self) -> Box<Self> {
-        Box::new(self)
     }
 }
 
