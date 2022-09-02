@@ -2,7 +2,7 @@
 #[path = "./win32.rs"]
 mod platform;
 
-use crate::geometry::{Extent, Point};
+use crate::gfx::geometry::{Extent, Point};
 
 pub struct WindowConfig<'a> {
     pub title: &'a str,

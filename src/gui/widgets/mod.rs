@@ -4,9 +4,11 @@ pub mod split_panel;
 pub mod tabbed_panel;
 
 use crate::{
-    color::Color,
-    draw_command::DrawCommand,
-    geometry::{Extent, Offset, Point, Rect},
+    gfx::{
+        color::Color,
+        draw_command::DrawCommand,
+        geometry::{Extent, Offset, Point, Rect},
+    },
     shell::input::{Event, Input},
 };
 

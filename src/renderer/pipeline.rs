@@ -2,7 +2,7 @@ use std::ffi::CStr;
 
 use ash::vk;
 
-use crate::color::Color;
+use crate::gfx::color::Color;
 
 use super::{error::Error, vertex::Vertex};
 

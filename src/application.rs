@@ -1,8 +1,10 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    color::Color,
-    geometry::{Extent, Point},
+    gfx::{
+        color::Color,
+        geometry::{Extent, Point},
+    },
     gui::widgets::{Canvas, LayoutContext, UpdateContext, Widget},
     renderer::{Renderer, SwapchainHandle},
     shell::{

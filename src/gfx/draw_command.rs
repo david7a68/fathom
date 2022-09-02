@@ -1,4 +1,4 @@
-use crate::{color::Color, geometry::Rect};
+use crate::gfx::{color::Color, geometry::Rect};
 
 #[derive(Debug)]
 pub enum DrawCommand {

@@ -1,5 +1,5 @@
 use crate::{
-    geometry::{Extent, Offset, Px},
+    gfx::geometry::{Extent, Offset, Px},
     shell::input::Event,
 };
 

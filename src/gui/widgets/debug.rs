@@ -1,8 +1,10 @@
 use rand::random;
 
 use crate::{
-    color::Color,
-    geometry::{Extent, Point, Rect},
+    gfx::{
+        color::Color,
+        geometry::{Extent, Point, Rect},
+    },
     shell::input::Event,
 };
 

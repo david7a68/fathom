@@ -1,4 +1,4 @@
-use crate::geometry::{Extent, Point, Px};
+use crate::gfx::geometry::{Extent, Point, Px};
 
 use std::{cell::RefCell, rc::Rc};
 use windows::{

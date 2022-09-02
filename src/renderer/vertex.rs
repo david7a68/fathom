@@ -1,6 +1,6 @@
 use ash::vk;
 
-use crate::{color::Color, draw_command::DrawCommand, geometry::Point};
+use crate::gfx::{color::Color, draw_command::DrawCommand, geometry::Point};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]

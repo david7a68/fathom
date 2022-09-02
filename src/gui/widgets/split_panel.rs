@@ -1,5 +1,5 @@
 use crate::{
-    geometry::{Extent, Offset, Px},
+    gfx::geometry::{Extent, Offset, Px},
     shell::input::Event,
 };
 
@@ -129,7 +129,7 @@ impl<W: Widget + 'static> Widget for SplitPanel<W> {
                 }
 
                 constraints.max
-            },
+            }
         }
     }
 

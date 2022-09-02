@@ -1,8 +1,10 @@
 use rand::random;
 
 use crate::{
-    color::Color,
-    geometry::{Extent, Offset, Px, Rect},
+    gfx::{
+        color::Color,
+        geometry::{Extent, Offset, Px, Rect},
+    },
     shell::input::{ButtonState, Event, MouseButton},
 };
 

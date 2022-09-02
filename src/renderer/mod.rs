@@ -17,8 +17,7 @@ use windows::Win32::{
 };
 
 use crate::{
-    color::Color,
-    draw_command::DrawCommand,
+    gfx::{color::Color, draw_command::DrawCommand},
     indexed_object_pool::{newtype_index, IndexedObjectPool},
 };
 

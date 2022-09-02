@@ -1,6 +1,6 @@
 use fathom::{
     application::{Application, WindowConfig},
-    color::Color,
+    gfx::color::Color,
     gui::widgets::{
         debug::Fill,
         split_panel::{Axis, SplitPanel},

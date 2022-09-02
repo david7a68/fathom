@@ -1,4 +1,4 @@
-use crate::geometry::Point;
+use crate::gfx::geometry::Point;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
