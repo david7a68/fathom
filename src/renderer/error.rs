@@ -1,5 +1,7 @@
 use ash::vk;
 
+use super::memory::MemoryLocation;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("a compatible Vulkan driver was not found")]
@@ -14,4 +16,8 @@ pub enum Error {
     TooManyObjects,
     #[error("per-draw index buffer exceeds 2^16 indices")]
     IndexBufferTooLarge,
+    #[error("the requested allocation failed")]
+    OutOfMemory(vk::Result),
+    #[error("no suitable memory type for the requested allocation could be found")]
+    NoSuitableMemoryType(vk::MemoryRequirements, MemoryLocation),
 }
