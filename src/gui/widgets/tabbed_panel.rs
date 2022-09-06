@@ -8,7 +8,7 @@ use crate::{
     shell::input::{ButtonState, Event, MouseButton},
 };
 
-use super::{BoxConstraint, Canvas, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState};
+use super::{BoxConstraint, DrawContext, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState};
 
 const TAB_BAR_HEIGHT: Px = Px(10);
 const TAB_WIDTH: Px = Px(30);
@@ -131,7 +131,7 @@ impl<W: Widget> Widget for TabbedPanel<W> {
         constraints.max
     }
 
-    fn accept_draw(&self, canvas: &mut Canvas, _extent: Extent) {
+    fn accept_draw(&self, canvas: &mut DrawContext, _extent: Extent) {
         let mut advancing_x = Px(0);
         for child in &self.children {
             canvas.fill_rect(

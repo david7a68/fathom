@@ -3,7 +3,7 @@ use crate::{
     shell::input::Event,
 };
 
-use super::{BoxConstraint, Canvas, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState};
+use super::{BoxConstraint, DrawContext, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState};
 
 pub enum Axis {
     X,
@@ -133,7 +133,7 @@ impl<W: Widget + 'static> Widget for SplitPanel<W> {
         }
     }
 
-    fn accept_draw(&self, canvas: &mut Canvas, _extent: Extent) {
+    fn accept_draw(&self, canvas: &mut DrawContext, _extent: Extent) {
         for child in &self.children {
             canvas.draw(child)
         }

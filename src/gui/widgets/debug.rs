@@ -8,7 +8,7 @@ use crate::{
     shell::input::Event,
 };
 
-use super::{BoxConstraint, Canvas, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState};
+use super::{BoxConstraint, DrawContext, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState};
 
 pub struct Fill {
     widget_state: WidgetState,
@@ -58,7 +58,7 @@ impl Widget for Fill {
         constraints.max
     }
 
-    fn accept_draw(&self, canvas: &mut Canvas, extent: Extent) {
+    fn accept_draw(&self, canvas: &mut DrawContext, extent: Extent) {
         canvas.fill_rect(Rect::new(Point::zero(), extent), self.color);
     }
 }

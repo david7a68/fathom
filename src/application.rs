@@ -5,7 +5,7 @@ use crate::{
         color::Color,
         geometry::{Extent, Point},
     },
-    gui::widgets::{Canvas, LayoutContext, UpdateContext, Widget},
+    gui::widgets::{DrawContext, LayoutContext, UpdateContext, Widget},
     renderer::{Renderer, SwapchainHandle},
     shell::{
         event_loop::{EventLoop, Proxy, WindowEventHandler, WindowHandle},
@@ -106,15 +106,11 @@ impl WindowEventHandler for AppWindow {
         if window_size != Extent::zero() {
             LayoutContext::default().begin(self.widget_tree.as_mut(), window_size);
 
-            let mut canvas = Canvas::default();
-            canvas.draw(self.widget_tree.as_ref());
-            let command_buffer = canvas.finish();
-
             let mut renderer = self.renderer.borrow_mut();
-            renderer.begin_frame(self.swapchain).unwrap();
-            renderer
-                .end_frame(self.swapchain, Color::BLACK, &command_buffer)
-                .unwrap();
+            let mut canvas = renderer.begin_frame(self.swapchain).unwrap();
+            let mut draw_context = DrawContext::new(&mut canvas);
+            draw_context.draw(self.widget_tree.as_ref());
+            renderer.submit(canvas).unwrap();
         }
     }
 

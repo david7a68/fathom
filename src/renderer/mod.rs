@@ -8,7 +8,6 @@ mod vertex;
 use std::{
     collections::{HashMap, HashSet},
     ffi::CStr,
-    mem::MaybeUninit,
     os::raw::c_char,
 };
 
@@ -22,14 +21,14 @@ use windows::Win32::{
 };
 
 use crate::{
-    gfx::{color::Color, draw_command::DrawCommand},
+    gfx::color::Color,
     indexed_object_pool::{newtype_index, IndexedObjectPool},
 };
 
 use self::{
-    memory::{Allocation, Memory, MemoryLocation},
+    canvas::Canvas,
+    memory::{Allocation, Memory},
     swapchain::{Swapchain, FRAMES_IN_FLIGHT},
-    vertex::commands_to_vertices,
 };
 
 pub use error::Error;
@@ -60,81 +59,27 @@ struct Device {
     command_pool: vk::CommandPool,
 }
 
-struct GeometryBuffer {
-    vertex_buffer: vk::Buffer,
-    vertex_memory: Allocation,
-    index_buffer: vk::Buffer,
-    index_memory: Allocation,
+#[derive(Default)]
+struct DeferredDestroy {
+    buffers: Vec<vk::Buffer>,
+    allocations: Vec<Allocation>,
 }
 
-impl GeometryBuffer {
-    fn new(device: &mut Device) -> Result<Self, Error> {
-        let buffer_info = vk::BufferCreateInfo {
-            size: Memory::PAGE_SIZE,
-            usage: vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            ..Default::default()
-        };
-
-        let vertex_buffer = unsafe { device.device.create_buffer(&buffer_info, None) }?;
-        let vertex_memory = device.memory.allocate_buffer(
-            &device.device,
-            vertex_buffer,
-            MemoryLocation::CpuToGpu,
-            true,
-        )?;
-
-        let index_buffer = unsafe { device.device.create_buffer(&buffer_info, None) }?;
-        let index_memory = device.memory.allocate_buffer(
-            &device.device,
-            index_buffer,
-            MemoryLocation::CpuToGpu,
-            true,
-        )?;
-
-        Ok(Self {
-            vertex_buffer,
-            vertex_memory,
-            index_buffer,
-            index_memory,
-        })
-    }
-
-    fn upload_to_gpu(
-        &mut self,
-        device: &mut Device,
-        vertices: &[Vertex],
-        indices: &[u16],
-    ) -> Result<(), Error> {
-        {
-            let mut mapped_buffer = device.memory.map(&device.device, &self.vertex_memory)?;
-
-            // SAFETY: This is safe since MaybeUninit<Vertex> has the same size and alignment as Vertex
-            let vertices: &[MaybeUninit<Vertex>] = unsafe { std::mem::transmute(vertices) };
-
-            // SAFETY: This is safe to dereference
-            unsafe { mapped_buffer.as_mut()[0..vertices.len()].copy_from_slice(vertices) };
-            device.memory.unmap(&device.device, &self.vertex_memory)?;
+impl DeferredDestroy {
+    fn cleanup(&mut self, device: &mut Device) {
+        for buffer in self.buffers.drain(..) {
+            unsafe { device.device.destroy_buffer(buffer, None) };
         }
-        {
-            let mut mapped_buffer = device.memory.map(&device.device, &self.index_memory)?;
-            // SAFETY: This is safe since MaybeUninit<Vertex> has the same size and alignment as Vertex
-            let indices: &[MaybeUninit<u16>] = unsafe { std::mem::transmute(indices) };
 
-            // SAFETY: This is safe to dereference
-            unsafe { mapped_buffer.as_mut()[0..indices.len()].copy_from_slice(indices) };
-            device.memory.unmap(&device.device, &self.index_memory)?;
+        for allocation in self.allocations.drain(..) {
+            device.memory.deallocate(allocation);
         }
-        Ok(())
     }
 }
 
 struct RenderState {
-    command_buffers: [vk::CommandBuffer; FRAMES_IN_FLIGHT as usize],
-    geometry_buffers: [GeometryBuffer; FRAMES_IN_FLIGHT as usize],
+    deferred_destroy: [DeferredDestroy; FRAMES_IN_FLIGHT as usize],
     frame_buffers: Vec<vk::Framebuffer>,
-    vertex_buffer: Vec<Vertex>,
-    index_buffer: Vec<u16>,
 }
 
 impl RenderState {
@@ -144,29 +89,6 @@ impl RenderState {
         swapchain: &Swapchain,
     ) -> Result<Self, Error> {
         let vkdevice = &device.device;
-        let command_buffers = {
-            let mut array = [vk::CommandBuffer::null(); FRAMES_IN_FLIGHT as usize];
-
-            let command_buffer_ai = vk::CommandBufferAllocateInfo::builder()
-                .command_pool(device.command_pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(FRAMES_IN_FLIGHT)
-                .build();
-
-            let vk_result = unsafe {
-                (vkdevice.fp_v1_0().allocate_command_buffers)(
-                    vkdevice.handle(),
-                    &command_buffer_ai,
-                    array.as_mut_ptr(),
-                )
-            };
-
-            if vk_result != vk::Result::SUCCESS {
-                return Err(Error::Vulkan(vk_result));
-            }
-
-            array
-        };
 
         let pipeline = if let Some(pipeline) = pipelines.get(&swapchain.format) {
             pipeline
@@ -195,37 +117,19 @@ impl RenderState {
         };
 
         Ok(Self {
-            command_buffers,
             frame_buffers,
-            geometry_buffers: [GeometryBuffer::new(device)?, GeometryBuffer::new(device)?],
-            vertex_buffer: Vec::new(),
-            index_buffer: Vec::new(),
+            deferred_destroy: Default::default(),
         })
     }
 
     fn destroy_with(&mut self, device: &mut Device) {
         unsafe {
-            device
-                .device
-                .free_command_buffers(device.command_pool, &self.command_buffers);
-
             for framebuffer in self.frame_buffers.drain(..) {
                 device.device.destroy_framebuffer(framebuffer, None);
             }
 
-            for geometry_buffer in &mut self.geometry_buffers {
-                device
-                    .device
-                    .destroy_buffer(geometry_buffer.vertex_buffer, None);
-                device
-                    .device
-                    .destroy_buffer(geometry_buffer.index_buffer, None);
-                device
-                    .memory
-                    .deallocate(std::mem::take(&mut geometry_buffer.vertex_memory));
-                device
-                    .memory
-                    .deallocate(std::mem::take(&mut geometry_buffer.index_memory));
+            for deferred in &mut self.deferred_destroy {
+                deferred.cleanup(device);
             }
         }
     }
@@ -404,15 +308,13 @@ impl Renderer {
         Ok(())
     }
 
-    pub fn begin_frame(&mut self, handle: SwapchainHandle) -> Result<(), Error> {
-        let device = self.device.as_ref().unwrap();
-        let (swapchain, _) = self.swapchains.get_mut(handle).unwrap();
+    pub fn begin_frame(&mut self, handle: SwapchainHandle) -> Result<Canvas, Error> {
+        let device = self.device.as_mut().unwrap();
+        let (swapchain, render_state) = self.swapchains.get_mut(handle).unwrap();
 
         match swapchain.acquire_next_image(device) {
             Ok(_) => Ok(()),
             Err(Error::SwapchainOutOfDate) => {
-                let (swapchain, render_state) = self.swapchains.get_mut(handle).unwrap();
-
                 swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
                 render_state.update(device, &mut self.pipelines, swapchain)?;
 
@@ -420,48 +322,68 @@ impl Renderer {
                 Ok(())
             }
             Err(e) => Err(e),
-        }
+        }?;
+
+        // TODO(straivers): calling frame_id() is kinda ugly
+        render_state.deferred_destroy[swapchain.frame_id()].cleanup(device);
+
+        Canvas::new(
+            device,
+            swapchain.extent,
+            handle,
+            render_state.frame_buffers[swapchain.current_image.unwrap() as usize],
+        )
     }
 
-    pub fn end_frame(
-        &mut self,
-        handle: SwapchainHandle,
-        clear_color: Color,
-        draw_commands: &[DrawCommand],
-    ) -> Result<(), Error> {
+    pub fn submit(&mut self, canvas: Canvas) -> Result<(), Error> {
         let device = self.device.as_mut().unwrap();
-        let (swapchain, render_state) = self.swapchains.get_mut(handle).unwrap();
+        let (swapchain, render_state) = self.swapchains.get_mut(canvas.swapchain).unwrap();
+        let (frame_id, frame_objects) = swapchain.frame_objects();
 
-        let (frame_index, frame_objects) = swapchain.frame_objects();
+        let pipeline = if let Some(pipeline) = self.pipelines.get(&swapchain.format) {
+            pipeline
+        } else {
+            self.pipelines.insert(
+                swapchain.format,
+                pipeline::create(&device.device, swapchain.format)?,
+            );
+            self.pipelines.get(&swapchain.format).unwrap()
+        };
 
-        render_state.vertex_buffer.clear();
-        render_state.index_buffer.clear();
-        commands_to_vertices(
-            draw_commands,
-            &mut render_state.vertex_buffer,
-            &mut render_state.index_buffer,
-        );
+        let command_buffer = {
+            let command_buffer_ci = vk::CommandBufferAllocateInfo {
+                command_pool: device.command_pool,
+                level: vk::CommandBufferLevel::PRIMARY,
+                command_buffer_count: 1,
+                ..Default::default()
+            };
 
-        render_state.geometry_buffers[frame_index].upload_to_gpu(
-            device,
-            &render_state.vertex_buffer,
-            &render_state.index_buffer,
-        )?;
+            let mut handle = [vk::CommandBuffer::null()];
+            let vk_result = unsafe {
+                (device.device.fp_v1_0().allocate_command_buffers)(
+                    device.device.handle(),
+                    &command_buffer_ci,
+                    handle.as_mut_ptr(),
+                )
+            };
 
-        let command_buffer = pipeline::record_draw(
+            if vk_result != vk::Result::SUCCESS {
+                return Err(Error::Vulkan(vk_result));
+            }
+
+            handle[0]
+        };
+
+        pipeline::record_draw(
             &device.device,
-            self.pipelines.get(&swapchain.format).unwrap(),
-            render_state.command_buffers[frame_index],
-            render_state.frame_buffers[swapchain.current_image.unwrap() as usize],
-            swapchain.extent,
-            clear_color,
-            render_state.geometry_buffers[frame_index].vertex_buffer,
-            render_state.geometry_buffers[frame_index].index_buffer,
-            render_state
-                .index_buffer
-                .len()
-                .try_into()
-                .map_err(|_| Error::IndexBufferTooLarge)?,
+            pipeline,
+            command_buffer,
+            canvas.frame_buffer,
+            canvas.extent,
+            Color::BLACK,
+            canvas.vertex_buffer,
+            canvas.index_buffer,
+            canvas.num_indices() as u16,
         )?;
 
         unsafe {
@@ -478,14 +400,13 @@ impl Renderer {
             )?;
         }
 
+        canvas.finish(device, &mut render_state.deferred_destroy[frame_id])?;
+
         match swapchain.present(device) {
             Ok(_) => Ok(()),
             Err(Error::SwapchainOutOfDate) => {
-                let (swapchain, render_state) = self.swapchains.get_mut(handle).unwrap();
-
                 swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
                 render_state.update(device, &mut self.pipelines, swapchain)?;
-
                 swapchain.acquire_next_image(device)?;
                 Ok(())
             }

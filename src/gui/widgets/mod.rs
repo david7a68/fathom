@@ -5,8 +5,8 @@ pub mod tabbed_panel;
 
 use crate::{
     gfx::{
+        canvas::Canvas,
         color::Color,
-        draw_command::DrawCommand,
         geometry::{Extent, Offset, Point, Rect},
     },
     shell::input::{Event, Input},
@@ -23,7 +23,7 @@ pub trait Widget {
 
     fn accept_layout(&mut self, context: &mut LayoutContext, constraints: BoxConstraint) -> Extent;
 
-    fn accept_draw(&self, canvas: &mut Canvas, extent: Extent);
+    fn accept_draw(&self, canvas: &mut DrawContext, extent: Extent);
 }
 
 /// Implementing [`Widget`] for `Box<dyn Widget>` permits a few nifty
@@ -62,7 +62,7 @@ impl Widget for Box<dyn Widget> {
     }
 
     #[inline]
-    fn accept_draw(&self, canvas: &mut Canvas, extent: Extent) {
+    fn accept_draw(&self, canvas: &mut DrawContext, extent: Extent) {
         self.as_ref().accept_draw(canvas, extent);
     }
 }
@@ -202,15 +202,17 @@ impl LayoutContext {
     }
 }
 
-#[derive(Default)]
-pub struct Canvas {
+pub struct DrawContext<'a> {
+    canvas: &'a mut dyn Canvas,
     current_offset: Offset,
-    command_buffer: Vec<DrawCommand>,
 }
 
-impl Canvas {
-    pub fn finish(self) -> Vec<DrawCommand> {
-        self.command_buffer
+impl<'a> DrawContext<'a> {
+    pub fn new(canvas: &'a mut dyn Canvas) -> Self {
+        Self {
+            canvas,
+            current_offset: Offset::zero(),
+        }
     }
 
     pub fn draw(&mut self, widget: &dyn Widget) {
@@ -230,8 +232,7 @@ impl Canvas {
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
         // convert the rect into absolute coordinates
         let rect = rect + self.current_offset;
-
-        self.command_buffer.push(DrawCommand::Rect(rect, color));
+        self.canvas.fill_rect(rect, color);
     }
 }
 

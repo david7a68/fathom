@@ -364,7 +364,6 @@ impl MemoryBlock {
         // outlives an unmap operation?
 
         let mapped_ptr = if let Some(mapped_ptr) = self.mapped_ptr {
-            self.times_mapped += 1;
             mapped_ptr
         } else {
             assert_eq!(self.times_mapped, 0);
@@ -378,11 +377,11 @@ impl MemoryBlock {
                 )?)
             };
 
-            self.times_mapped = 1;
             self.mapped_ptr = Some(ptr);
             ptr
         };
 
+        self.times_mapped += 1;
         assert!(allocation.offset < self.size);
 
         // TODO(straivers): should alignment errors be returned in Error instead?
@@ -411,6 +410,7 @@ impl MemoryBlock {
 
             if self.times_mapped == 0 {
                 unsafe { device.unmap_memory(self.memory) };
+                self.mapped_ptr = None;
             }
         }
 

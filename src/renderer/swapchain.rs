@@ -125,6 +125,10 @@ impl Swapchain {
         Ok(())
     }
 
+    pub(super) fn frame_id(&self) -> usize {
+        (self.current_frame % DESIRED_SWAPCHAIN_LENGTH) as usize
+    }
+
     pub(super) fn frame_objects(&self) -> (usize, &FrameSyncObjects) {
         let index = (self.current_frame % DESIRED_SWAPCHAIN_LENGTH) as usize;
         (index, &self.frame_sync_objects[index])
