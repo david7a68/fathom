@@ -1,3 +1,4 @@
+mod canvas;
 mod error;
 mod memory;
 mod pipeline;
@@ -12,6 +13,8 @@ use std::{
 };
 
 use ash::vk;
+
+#[cfg(target_os = "windows")]
 use windows::Win32::{
     Foundation::{HWND, RECT},
     System::LibraryLoader::GetModuleHandleW,
@@ -99,7 +102,7 @@ impl GeometryBuffer {
 
     fn upload_to_gpu(
         &mut self,
-        device: &Device,
+        device: &mut Device,
         vertices: &[Vertex],
         indices: &[u16],
     ) -> Result<(), Error> {
@@ -359,7 +362,7 @@ impl Renderer {
         };
 
         let extent = unsafe {
-            let mut rect: RECT = std::mem::zeroed();
+            let mut rect = RECT::default();
             GetClientRect(hwnd, &mut rect);
             vk::Extent2D {
                 width: u32::try_from(rect.right).unwrap(),
@@ -367,6 +370,14 @@ impl Renderer {
             }
         };
 
+        self.create_swapchain_impl(surface, extent)
+    }
+
+    fn create_swapchain_impl(
+        &mut self,
+        surface: vk::SurfaceKHR,
+        extent: vk::Extent2D,
+    ) -> Result<SwapchainHandle, Error> {
         let device = if let Some(device) = &mut self.device {
             device
         } else {
@@ -418,7 +429,7 @@ impl Renderer {
         clear_color: Color,
         draw_commands: &[DrawCommand],
     ) -> Result<(), Error> {
-        let device = self.device.as_ref().unwrap();
+        let device = self.device.as_mut().unwrap();
         let (swapchain, render_state) = self.swapchains.get_mut(handle).unwrap();
 
         let (frame_index, frame_objects) = swapchain.frame_objects();

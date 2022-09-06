@@ -67,7 +67,7 @@ impl Memory {
     }
 
     pub(super) fn map<T>(
-        &self,
+        &mut self,
         device: &ash::Device,
         allocation: &Allocation,
     ) -> Result<NonNull<[MaybeUninit<T>]>, Error> {
@@ -86,7 +86,11 @@ impl Memory {
         }
     }
 
-    pub(super) fn unmap(&self, device: &ash::Device, allocation: &Allocation) -> Result<(), Error> {
+    pub(super) fn unmap(
+        &mut self,
+        device: &ash::Device,
+        allocation: &Allocation,
+    ) -> Result<(), Error> {
         self.memory_types[allocation.type_index as usize].unmap(
             device,
             &HeapAllocation {
@@ -212,6 +216,7 @@ struct HeapAllocation {
 struct MemoryType {
     index: u32,
     is_device_local: bool,
+    // TODO(straivers): This could be an ArrayVec<MemoryBlock, 16> (1 or 4 GiB)
     blocks: Vec<MemoryBlock>,
     available_block_indices: Vec<usize>,
 }
@@ -233,7 +238,7 @@ impl MemoryType {
     }
 
     fn map<T>(
-        &self,
+        &mut self,
         device: &ash::Device,
         allocation: &HeapAllocation,
     ) -> Result<NonNull<[MaybeUninit<T>]>, Error> {
@@ -246,7 +251,7 @@ impl MemoryType {
         )
     }
 
-    fn unmap(&self, device: &ash::Device, allocation: &HeapAllocation) -> Result<(), Error> {
+    fn unmap(&mut self, device: &ash::Device, allocation: &HeapAllocation) -> Result<(), Error> {
         self.blocks[allocation.block_index as usize].unmap(
             device,
             Page {
@@ -309,8 +314,11 @@ struct Page {
 }
 
 pub struct MemoryBlock {
+    size: vk::DeviceSize,
     memory: vk::DeviceMemory,
     bitmap: u64,
+    times_mapped: u64,
+    mapped_ptr: Option<NonNull<std::ffi::c_void>>,
 }
 
 impl MemoryBlock {
@@ -326,7 +334,13 @@ impl MemoryBlock {
 
         let bitmap = u64::MAX >> (u64::BITS as vk::DeviceSize - (size / PAGE_SIZE));
 
-        Ok(Self { memory, bitmap })
+        Ok(Self {
+            size,
+            memory,
+            bitmap,
+            times_mapped: 0,
+            mapped_ptr: None,
+        })
     }
 
     fn destroy(&mut self, device: &ash::Device) {
@@ -339,37 +353,67 @@ impl MemoryBlock {
 
     /// Maps GPU memory to the program's address space.
     fn map<T>(
-        &self,
+        &mut self,
         device: &ash::Device,
         allocation: Page,
     ) -> Result<NonNull<[MaybeUninit<T>]>, Error> {
         // TODO(straivers): Could implement additional runtime safety checks
         // here such as ensuring that no two mappings overlap.
-        //
+
         // TODO(straivers): How can we make sure that the mapped pointer never
         // outlives an unmap operation?
 
-        let mapped_ptr = unsafe {
-            device.map_memory(
-                self.memory,
-                allocation.offset,
-                PAGE_SIZE,
-                vk::MemoryMapFlags::empty(),
-            )?
-        }
-        .cast();
+        let mapped_ptr = if let Some(mapped_ptr) = self.mapped_ptr {
+            self.times_mapped += 1;
+            mapped_ptr
+        } else {
+            assert_eq!(self.times_mapped, 0);
 
+            let ptr = unsafe {
+                NonNull::new_unchecked(device.map_memory(
+                    self.memory,
+                    0,
+                    vk::WHOLE_SIZE,
+                    vk::MemoryMapFlags::empty(),
+                )?)
+            };
+
+            self.times_mapped = 1;
+            self.mapped_ptr = Some(ptr);
+            ptr
+        };
+
+        assert!(allocation.offset < self.size);
+
+        // TODO(straivers): should alignment errors be returned in Error instead?
+        assert_eq!(allocation.offset as usize % std::mem::align_of::<T>(), 0);
+        let offset_ptr = unsafe { mapped_ptr.as_ptr().add(allocation.offset as usize) }.cast();
+
+        // TODO(straivers): this should return an error instead of panicking
+        assert!(
+            std::mem::size_of::<T>() <= PAGE_SIZE as usize,
+            "requested type larger than page size"
+        );
+
+        // NOTE(straivers): chops off any extra bytes
         let slice_length = PAGE_SIZE as usize / std::mem::size_of::<T>();
 
         // SAFETY: This is safe because Vulkan will never return a null
         // pointer instead of returning an error in VkResult.
         Ok(unsafe {
-            NonNull::new_unchecked(std::slice::from_raw_parts_mut(mapped_ptr, slice_length))
+            NonNull::new_unchecked(std::slice::from_raw_parts_mut(offset_ptr, slice_length))
         })
     }
 
-    fn unmap(&self, device: &ash::Device, _allocation: Page) -> Result<(), Error> {
-        unsafe { device.unmap_memory(self.memory) };
+    fn unmap(&mut self, device: &ash::Device, _allocation: Page) -> Result<(), Error> {
+        if self.mapped_ptr.is_some() {
+            self.times_mapped -= 1;
+
+            if self.times_mapped == 0 {
+                unsafe { device.unmap_memory(self.memory) };
+            }
+        }
+
         Ok(())
     }
 
