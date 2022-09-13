@@ -2,6 +2,7 @@ use rand::random;
 
 use crate::{
     gfx::{
+        canvas::Paint,
         color::Color,
         geometry::{Extent, Offset, Px, Rect},
     },
@@ -136,14 +137,14 @@ impl<W: Widget> Widget for TabbedPanel<W> {
     fn accept_draw(&self, canvas: &mut DrawContext, _extent: Extent) {
         let mut advancing_x = Px(0);
         for child in &self.children {
-            canvas.fill_rect(
+            canvas.draw_rect(
                 Rect {
                     left: advancing_x,
                     right: advancing_x + child.width,
                     top: Px(0),
                     bottom: TAB_BAR_HEIGHT,
                 },
-                child.color,
+                &Paint::Fill { color: child.color },
             );
 
             advancing_x += child.width;

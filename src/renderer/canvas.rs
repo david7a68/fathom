@@ -3,6 +3,7 @@ use std::{mem::MaybeUninit, ptr::NonNull};
 use ash::vk;
 
 use crate::gfx::{
+    canvas::Paint,
     color::Color,
     geometry::{Extent, Px, Rect},
 };
@@ -100,34 +101,38 @@ impl crate::gfx::canvas::Canvas for Canvas {
         }
     }
 
-    fn fill_rect(&mut self, rect: Rect, color: Color) {
-        let offset = self.vertices.len() as u16;
+    fn draw_rect(&mut self, rect: Rect, paint: &Paint) {
+        match paint {
+            Paint::Fill { color } => {
+                let offset = self.vertices.len() as u16;
 
-        self.vertices.push(Vertex {
-            point: rect.top_left(),
-            color,
-        });
-        self.vertices.push(Vertex {
-            point: rect.top_right(),
-            color,
-        });
-        self.vertices.push(Vertex {
-            point: rect.bottom_right(),
-            color,
-        });
-        self.vertices.push(Vertex {
-            point: rect.bottom_left(),
-            color,
-        });
+                self.vertices.push(Vertex {
+                    point: rect.top_left(),
+                    color: *color,
+                });
+                self.vertices.push(Vertex {
+                    point: rect.top_right(),
+                    color: *color,
+                });
+                self.vertices.push(Vertex {
+                    point: rect.bottom_right(),
+                    color: *color,
+                });
+                self.vertices.push(Vertex {
+                    point: rect.bottom_left(),
+                    color: *color,
+                });
 
-        self.indices.extend_from_slice(&[
-            offset,
-            offset + 1,
-            offset + 2,
-            offset + 2,
-            offset + 3,
-            offset,
-        ]);
+                self.indices.extend_from_slice(&[
+                    offset,
+                    offset + 1,
+                    offset + 2,
+                    offset + 2,
+                    offset + 3,
+                    offset,
+                ]);
+            }
+        }
     }
 }
 

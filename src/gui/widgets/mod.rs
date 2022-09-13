@@ -5,7 +5,7 @@ pub mod tabbed_panel;
 
 use crate::{
     gfx::{
-        canvas::Canvas,
+        canvas::{Canvas, Paint},
         color::Color,
         geometry::{Extent, Offset, Point, Rect},
     },
@@ -229,10 +229,10 @@ impl<'a> DrawContext<'a> {
     }
 
     /// Draws a colored rectangle at the given relative coordinates.
-    pub fn fill_rect(&mut self, rect: Rect, color: Color) {
+    pub fn draw_rect(&mut self, rect: Rect, paint: &Paint) {
         // convert the rect into absolute coordinates
         let rect = rect + self.current_offset;
-        self.canvas.fill_rect(rect, color);
+        self.canvas.draw_rect(rect, paint);
     }
 }
 

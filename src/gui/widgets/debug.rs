@@ -2,6 +2,7 @@ use rand::random;
 
 use crate::{
     gfx::{
+        canvas::Paint,
         color::Color,
         geometry::{Extent, Point, Rect},
     },
@@ -61,6 +62,9 @@ impl Widget for Fill {
     }
 
     fn accept_draw(&self, canvas: &mut DrawContext, extent: Extent) {
-        canvas.fill_rect(Rect::new(Point::zero(), extent), self.color);
+        canvas.draw_rect(
+            Rect::new(Point::zero(), extent),
+            &Paint::Fill { color: self.color },
+        );
     }
 }
