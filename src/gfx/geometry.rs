@@ -102,7 +102,7 @@ impl std::cmp::PartialOrd<i32> for Px {
 /// corner of the window) if the cursor has been captured and has left the
 /// window.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[must_use]
 pub struct Point {
     pub x: Px,
@@ -165,7 +165,7 @@ impl std::ops::SubAssign<Offset> for Point {
 
 /// The size of a 2D rectangle. It is never negative.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[must_use]
 pub struct Offset {
     pub x: Px,
@@ -214,7 +214,7 @@ impl std::ops::SubAssign for Offset {
 
 /// The size of a 2D rectangle. It is never negative.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[must_use]
 pub struct Extent {
     pub width: Px,
@@ -242,7 +242,7 @@ impl From<Offset> for Extent {
 
 /// A 2D rectangle. All coordinates are in pixels and may be negative (outside
 /// the window).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[must_use]
 pub struct Rect {
     pub top: Px,

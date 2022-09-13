@@ -106,7 +106,7 @@ impl RenderState {
             for view in &swapchain.image_views {
                 let framebuffer_ci = vk::FramebufferCreateInfo::builder()
                     .render_pass(pipeline.render_pass)
-                    .attachments(std::slice::from_ref(&*view))
+                    .attachments(std::slice::from_ref(view))
                     .width(swapchain.extent.width)
                     .height(swapchain.extent.height)
                     .layers(1);
@@ -157,7 +157,7 @@ impl RenderState {
         for view in &swapchain.image_views {
             let framebuffer_ci = vk::FramebufferCreateInfo::builder()
                 .render_pass(pipeline.render_pass)
-                .attachments(std::slice::from_ref(&*view))
+                .attachments(std::slice::from_ref(view))
                 .width(swapchain.extent.width)
                 .height(swapchain.extent.height)
                 .layers(1);

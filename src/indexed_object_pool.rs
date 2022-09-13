@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, mem::MaybeUninit};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[must_use]
 pub struct RawIndex {
     pub index: u32,
