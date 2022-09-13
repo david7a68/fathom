@@ -225,6 +225,10 @@ impl Extent {
     pub fn zero() -> Self {
         Self::default()
     }
+
+    pub fn area(&self) -> usize {
+        (self.width.0 * self.height.0) as usize
+    }
 }
 
 impl From<Offset> for Extent {
