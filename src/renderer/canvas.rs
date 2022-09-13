@@ -3,9 +3,9 @@ use std::{mem::MaybeUninit, ptr::NonNull};
 use ash::vk;
 
 use crate::gfx::{
-    canvas::Paint,
-    color::Color,
+    canvas::{ImageHandle, Paint},
     geometry::{Extent, Px, Rect},
+    pixel_buffer::PixelBuffer,
 };
 
 use super::{
@@ -101,6 +101,14 @@ impl crate::gfx::canvas::Canvas for Canvas {
         }
     }
 
+    fn create_image(&mut self, pixels: &PixelBuffer) -> ImageHandle {
+        todo!()
+    }
+
+    fn destroy_image(&mut self, image: ImageHandle) {
+        todo!()
+    }
+
     fn draw_rect(&mut self, rect: Rect, paint: &Paint) {
         match paint {
             Paint::Fill { color } => {
@@ -131,6 +139,14 @@ impl crate::gfx::canvas::Canvas for Canvas {
                     offset + 3,
                     offset,
                 ]);
+            }
+            Paint::Texture {
+                handle,
+                mode_x,
+                mode_y,
+                crop,
+            } => {
+                todo!()
             }
         }
     }

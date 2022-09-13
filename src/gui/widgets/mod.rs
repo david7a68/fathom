@@ -6,7 +6,6 @@ pub mod tabbed_panel;
 use crate::{
     gfx::{
         canvas::{Canvas, Paint},
-        color::Color,
         geometry::{Extent, Offset, Point, Rect},
     },
     shell::input::{Event, Input},
