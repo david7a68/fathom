@@ -2,11 +2,14 @@ use std::{mem::MaybeUninit, ptr::NonNull};
 
 use ash::vk;
 
-use crate::gfx::{color::Color, geometry::{Rect, Extent, Px}};
+use crate::gfx::{
+    color::Color,
+    geometry::{Extent, Px, Rect},
+};
 
 use super::{
     memory::{Allocation, Memory, MemoryLocation},
-    Device, Error, SwapchainHandle, Vertex, DeferredDestroy,
+    DeferredDestroy, Device, Error, SwapchainHandle, Vertex,
 };
 
 pub struct Canvas {
@@ -68,7 +71,11 @@ impl Canvas {
         })
     }
 
-    pub(super) fn finish(self, device: &mut Device, queue: &mut DeferredDestroy) -> Result<(), Error> {
+    pub(super) fn finish(
+        self,
+        device: &mut Device,
+        queue: &mut DeferredDestroy,
+    ) -> Result<(), Error> {
         device.memory.unmap(&device.device, &self.vertex_memory)?;
         device.memory.unmap(&device.device, &self.index_memory)?;
 

@@ -1,4 +1,7 @@
-use super::{geometry::{Rect, Extent}, color::Color};
+use super::{
+    color::Color,
+    geometry::{Extent, Rect},
+};
 
 pub trait Canvas {
     fn extent(&self) -> Extent;

@@ -8,7 +8,9 @@ use crate::{
     shell::input::{ButtonState, Event, MouseButton},
 };
 
-use super::{BoxConstraint, DrawContext, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState};
+use super::{
+    BoxConstraint, DrawContext, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState,
+};
 
 const TAB_BAR_HEIGHT: Px = Px(10);
 const TAB_WIDTH: Px = Px(30);

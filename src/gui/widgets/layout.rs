@@ -3,7 +3,9 @@ use crate::{
     shell::input::Event,
 };
 
-use super::{BoxConstraint, DrawContext, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState};
+use super::{
+    BoxConstraint, DrawContext, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState,
+};
 
 pub struct Center<W: Widget + 'static> {
     widget_state: WidgetState,

@@ -8,7 +8,9 @@ use crate::{
     shell::input::Event,
 };
 
-use super::{BoxConstraint, DrawContext, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState};
+use super::{
+    BoxConstraint, DrawContext, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState,
+};
 
 pub struct Fill {
     widget_state: WidgetState,
