@@ -423,7 +423,6 @@ impl MemoryBlock {
         } else {
             // Subtract 1 since we're 0-indexing
             let index = (u64::BITS - self.bitmap.leading_zeros()) - 1;
-            println!("{index}");
             self.bitmap &= !(1 << index);
             Ok(Page {
                 offset: index as vk::DeviceSize * PAGE_SIZE,

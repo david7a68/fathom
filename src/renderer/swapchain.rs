@@ -1,6 +1,6 @@
 use ash::vk;
 
-use super::{error::Error, Device};
+use super::{error::Error, Device, VULKAN};
 
 pub const FRAMES_IN_FLIGHT: u32 = 2;
 pub const DESIRED_SWAPCHAIN_LENGTH: u32 = 2;
@@ -31,7 +31,6 @@ impl Swapchain {
         device: &Device,
         surface: vk::SurfaceKHR,
         extent: vk::Extent2D,
-        surface_api: &ash::extensions::khr::Surface,
     ) -> Result<Self, Error> {
         let frame_sync_objects = unsafe {
             let semaphore_ci = vk::SemaphoreCreateInfo::builder();
@@ -51,13 +50,8 @@ impl Swapchain {
             ]
         };
 
-        let (handle, format, extent, image_views) = create_raw_swapchain(
-            device,
-            surface,
-            extent,
-            vk::SwapchainKHR::null(),
-            surface_api,
-        )?;
+        let (handle, format, extent, image_views) =
+            create_raw_swapchain(device, surface, extent, vk::SwapchainKHR::null())?;
 
         Ok(Swapchain {
             handle,
@@ -71,17 +65,12 @@ impl Swapchain {
         })
     }
 
-    pub(super) fn resize(
-        &mut self,
-        device: &Device,
-        new_size: vk::Extent2D,
-        surface_api: &ash::extensions::khr::Surface,
-    ) -> Result<(), Error> {
+    pub(super) fn resize(&mut self, device: &Device, new_size: vk::Extent2D) -> Result<(), Error> {
         assert_eq!(self.current_image, None);
         self.wait_idle(device)?;
 
         let (handle, format, extent, image_views) =
-            create_raw_swapchain(device, self.surface, new_size, self.handle, surface_api)?;
+            create_raw_swapchain(device, self.surface, new_size, self.handle)?;
 
         unsafe {
             device.swapchain_api.destroy_swapchain(self.handle, None);
@@ -99,11 +88,7 @@ impl Swapchain {
         Ok(())
     }
 
-    pub(super) fn destroy_with(
-        &mut self,
-        device: &Device,
-        surface_api: &ash::extensions::khr::Surface,
-    ) -> Result<(), Error> {
+    pub(super) fn destroy_with(&mut self, device: &Device) -> Result<(), Error> {
         self.wait_idle(device)?;
 
         let vkdevice = &device.device;
@@ -119,7 +104,7 @@ impl Swapchain {
             }
 
             device.swapchain_api.destroy_swapchain(self.handle, None);
-            surface_api.destroy_surface(self.surface, None);
+            VULKAN.surface_api.destroy_surface(self.surface, None);
         }
 
         Ok(())
@@ -196,7 +181,6 @@ fn create_raw_swapchain(
     surface: vk::SurfaceKHR,
     extent: vk::Extent2D,
     old_swapchain: vk::SwapchainKHR,
-    surface_api: &ash::extensions::khr::Surface,
 ) -> Result<
     (
         vk::SwapchainKHR,
@@ -209,16 +193,22 @@ fn create_raw_swapchain(
     let vkdevice = &device.device;
 
     let format = {
-        let formats =
-            unsafe { surface_api.get_physical_device_surface_formats(device.gpu, surface)? };
+        let formats = unsafe {
+            VULKAN
+                .surface_api
+                .get_physical_device_surface_formats(device.gpu, surface)?
+        };
         formats
             .iter()
             .find_map(|f| (f.format == vk::Format::B8G8R8A8_SRGB).then_some(*f))
             .unwrap_or(formats[0])
     };
 
-    let capabilities =
-        unsafe { surface_api.get_physical_device_surface_capabilities(device.gpu, surface)? };
+    let capabilities = unsafe {
+        VULKAN
+            .surface_api
+            .get_physical_device_surface_capabilities(device.gpu, surface)?
+    };
 
     let extent = if capabilities.current_extent.width == u32::MAX {
         vk::Extent2D {

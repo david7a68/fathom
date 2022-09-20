@@ -175,9 +175,6 @@ impl<W: Widget> Widget for Column<W> {
                 child_extent,
             );
 
-            println!("advancing_y: {:?}", advancing_y);
-            println!("child extent: {:?}", child_extent);
-
             // advance to the next widget's position
             advancing_y += child_extent.height + self.spacing;
             max_width = max_width.max(child_extent.width);

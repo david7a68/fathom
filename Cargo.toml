@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ash = { version = "0.37.0", features = ["libloading"] }
+once_cell = "1.14.0"
 rand = "0.8"
 thiserror = "1.0"
 

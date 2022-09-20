@@ -37,6 +37,7 @@ name = "fathom"
 version = "0.1.0"
 dependencies = [
  "ash",
+ "once_cell",
  "rand",
  "shaderc",
  "thiserror",
@@ -69,6 +70,12 @@ dependencies = [
  "cfg-if",
  "winapi",
 ]
+
+[[package]]
+name = "once_cell"
+version = "1.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f7254b99e31cad77da24b08ebf628882739a608578bb1bcdfc1f9c21260d7c0"
 
 [[package]]
 name = "ppv-lite86"

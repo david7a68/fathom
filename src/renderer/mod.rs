@@ -12,7 +12,7 @@ use std::{
 };
 
 use ash::vk;
-
+use once_cell::sync::Lazy;
 #[cfg(target_os = "windows")]
 use windows::Win32::{
     Foundation::{HWND, RECT},
@@ -43,6 +43,79 @@ const INSTANCE_EXTENSIONS: [*const i8; 2] = [
 ];
 
 const DEVICE_EXTENSIONS: [*const i8; 1] = [b"VK_KHR_swapchain\0".as_ptr().cast()];
+
+pub(self) struct Vulkan {
+    #[allow(dead_code)]
+    entry: ash::Entry,
+    instance: ash::Instance,
+
+    surface_api: ash::extensions::khr::Surface,
+
+    #[cfg(target_os = "windows")]
+    os_surface_api: ash::extensions::khr::Win32Surface,
+}
+
+static VULKAN: Lazy<Vulkan> = Lazy::new(|| {
+    let entry = unsafe { ash::Entry::load() }
+        .map_err(|_| Error::NoVulkanLibrary)
+        .unwrap();
+
+    let instance = {
+        let app_info = vk::ApplicationInfo::builder().api_version(vk::make_api_version(0, 1, 1, 0));
+
+        let mut instance_layers = vec![];
+
+        #[cfg(debug_assertions)]
+        {
+            let has_layers = has_required_names(
+                &entry.enumerate_instance_layer_properties().unwrap(),
+                |l| &l.layer_name,
+                &[VALIDATION_LAYER],
+            );
+
+            if has_layers[0] {
+                instance_layers.push(VALIDATION_LAYER);
+            }
+        }
+
+        let extensions = INSTANCE_EXTENSIONS;
+
+        {
+            let has_required = has_required_names(
+                &entry.enumerate_instance_extension_properties(None).unwrap(),
+                |e| &e.extension_name,
+                &INSTANCE_EXTENSIONS,
+            );
+
+            for (index, result) in has_required.iter().enumerate() {
+                assert!(
+                    result,
+                    "required Vulkan extension not found: {:?}",
+                    unsafe { CStr::from_ptr(extensions[index]) }
+                );
+            }
+        };
+
+        let instance_ci = vk::InstanceCreateInfo::builder()
+            .application_info(&app_info)
+            .enabled_layer_names(&instance_layers)
+            .enabled_extension_names(&extensions);
+
+        unsafe { entry.create_instance(&instance_ci, None) }.unwrap()
+    };
+
+    let surface_api = { ash::extensions::khr::Surface::new(&entry, &instance) };
+
+    #[cfg(target_os = "windows")]
+    let os_surface_api = { ash::extensions::khr::Win32Surface::new(&entry, &instance) };
+
+    Vulkan {
+        entry,
+        instance,
+        surface_api,
+        os_surface_api,
+    }
+});
 
 struct Device {
     device: ash::Device,
@@ -173,15 +246,6 @@ impl RenderState {
 newtype_index!(SwapchainHandle, (Swapchain, RenderState));
 
 pub struct Renderer {
-    #[allow(dead_code)]
-    entry: ash::Entry,
-    instance: ash::Instance,
-
-    surface_api: ash::extensions::khr::Surface,
-
-    #[cfg(target_os = "windows")]
-    os_surface_api: ash::extensions::khr::Win32Surface,
-
     device: Option<Device>,
     swapchains: IndexedObjectPool<(Swapchain, RenderState)>,
     pipelines: HashMap<vk::Format, pipeline::Pipeline>,
@@ -189,63 +253,9 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new() -> Result<Self, Error> {
-        let entry = unsafe { ash::Entry::load() }.map_err(|_| Error::NoVulkanLibrary)?;
-
-        let instance = {
-            let app_info =
-                vk::ApplicationInfo::builder().api_version(vk::make_api_version(0, 1, 1, 0));
-
-            let mut instance_layers = vec![];
-
-            #[cfg(debug_assertions)]
-            {
-                let has_layers = has_required_names(
-                    &entry.enumerate_instance_layer_properties().unwrap(),
-                    |l| &l.layer_name,
-                    &[VALIDATION_LAYER],
-                );
-
-                if has_layers[0] {
-                    instance_layers.push(VALIDATION_LAYER);
-                }
-            }
-
-            let extensions = INSTANCE_EXTENSIONS;
-
-            {
-                let has_required = has_required_names(
-                    &entry.enumerate_instance_extension_properties(None).unwrap(),
-                    |e| &e.extension_name,
-                    &INSTANCE_EXTENSIONS,
-                );
-
-                for (index, result) in has_required.iter().enumerate() {
-                    assert!(
-                        result,
-                        "required Vulkan extension not found: {:?}",
-                        unsafe { CStr::from_ptr(extensions[index]) }
-                    );
-                }
-            };
-
-            let instance_ci = vk::InstanceCreateInfo::builder()
-                .application_info(&app_info)
-                .enabled_layer_names(&instance_layers)
-                .enabled_extension_names(&extensions);
-
-            unsafe { entry.create_instance(&instance_ci, None) }?
-        };
-
-        let surface_api = { ash::extensions::khr::Surface::new(&entry, &instance) };
-
-        #[cfg(target_os = "windows")]
-        let os_surface_api = { ash::extensions::khr::Win32Surface::new(&entry, &instance) };
+        Lazy::force(&VULKAN);
 
         Ok(Self {
-            entry,
-            instance,
-            surface_api,
-            os_surface_api,
             device: None,
             swapchains: IndexedObjectPool::new(),
             pipelines: HashMap::new(),
@@ -261,7 +271,8 @@ impl Renderer {
             .hwnd(hwnd.0 as _);
 
         let surface = unsafe {
-            self.os_surface_api
+            VULKAN
+                .os_surface_api
                 .create_win32_surface(&surface_ci, None)?
         };
 
@@ -285,11 +296,11 @@ impl Renderer {
         let device = if let Some(device) = &mut self.device {
             device
         } else {
-            self.device = Some(init_device(&self.instance, &self.surface_api, surface)?);
+            self.device = Some(init_device(surface)?);
             self.device.as_mut().unwrap()
         };
 
-        let swapchain = Swapchain::new(device, surface, extent, &self.surface_api)?;
+        let swapchain = Swapchain::new(device, surface, extent)?;
         let render_state = RenderState::new(device, &mut self.pipelines, &swapchain)?;
 
         let handle = self
@@ -302,7 +313,7 @@ impl Renderer {
     pub fn destroy_swapchain(&mut self, handle: SwapchainHandle) -> Result<(), Error> {
         if let Some((mut swapchain, mut state)) = self.swapchains.remove(handle) {
             let device = self.device.as_mut().unwrap();
-            swapchain.destroy_with(device, &self.surface_api)?;
+            swapchain.destroy_with(device)?;
             state.destroy_with(device);
         }
         Ok(())
@@ -315,7 +326,7 @@ impl Renderer {
         match swapchain.acquire_next_image(device) {
             Ok(_) => Ok(()),
             Err(Error::SwapchainOutOfDate) => {
-                swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
+                swapchain.resize(device, vk::Extent2D::default())?;
                 render_state.update(device, &mut self.pipelines, swapchain)?;
 
                 swapchain.acquire_next_image(device)?;
@@ -405,7 +416,7 @@ impl Renderer {
         match swapchain.present(device) {
             Ok(_) => Ok(()),
             Err(Error::SwapchainOutOfDate) => {
-                swapchain.resize(device, vk::Extent2D::default(), &self.surface_api)?;
+                swapchain.resize(device, vk::Extent2D::default())?;
                 render_state.update(device, &mut self.pipelines, swapchain)?;
                 swapchain.acquire_next_image(device)?;
                 Ok(())
@@ -443,10 +454,6 @@ impl Drop for Renderer {
                 vkdevice.destroy_device(None);
             }
         }
-
-        unsafe {
-            self.instance.destroy_instance(None);
-        }
     }
 }
 
@@ -469,28 +476,30 @@ fn has_required_names<T, F: Fn(&T) -> &[c_char], const N: usize>(
     results
 }
 
-fn init_device(
-    instance: &ash::Instance,
-    surface_api: &ash::extensions::khr::Surface,
-    surface: vk::SurfaceKHR,
-) -> Result<Device, Error> {
+fn init_device(surface: vk::SurfaceKHR) -> Result<Device, Error> {
     let selected_device = {
         let mut selected_device = None;
 
-        for gpu in unsafe { instance.enumerate_physical_devices().unwrap() } {
+        for gpu in unsafe { VULKAN.instance.enumerate_physical_devices().unwrap() } {
             let mut found_present_family = false;
             let mut found_graphics_family = false;
             let mut present_family = 0;
             let mut graphics_family = 0;
 
-            let queue_families =
-                unsafe { instance.get_physical_device_queue_family_properties(gpu) };
+            let queue_families = unsafe {
+                VULKAN
+                    .instance
+                    .get_physical_device_queue_family_properties(gpu)
+            };
 
             for (index, queue_family) in queue_families.iter().enumerate().rev() {
                 let index = index.try_into().unwrap();
 
-                if unsafe { surface_api.get_physical_device_surface_support(gpu, index, surface)? }
-                {
+                if unsafe {
+                    VULKAN
+                        .surface_api
+                        .get_physical_device_surface_support(gpu, index, surface)?
+                } {
                     found_present_family = true;
                     present_family = index;
                 };
@@ -510,7 +519,7 @@ fn init_device(
             }
 
             let supports_swapchain = has_required_names(
-                &unsafe { instance.enumerate_device_extension_properties(gpu)? },
+                &unsafe { VULKAN.instance.enumerate_device_extension_properties(gpu)? },
                 |e| &e.extension_name,
                 &DEVICE_EXTENSIONS,
             )[0];
@@ -552,15 +561,15 @@ fn init_device(
             .queue_create_infos(&queue_ci[0..num_queues])
             .enabled_extension_names(&DEVICE_EXTENSIONS);
 
-        unsafe { instance.create_device(gpu, &device_ci, None)? }
+        unsafe { VULKAN.instance.create_device(gpu, &device_ci, None)? }
     };
 
     let graphics_queue = unsafe { device.get_device_queue(graphics_family, 0) };
     let present_queue = unsafe { device.get_device_queue(present_family, 0) };
 
-    let swapchain_api = { ash::extensions::khr::Swapchain::new(instance, &device) };
+    let swapchain_api = { ash::extensions::khr::Swapchain::new(&VULKAN.instance, &device) };
 
-    let memory_properties = unsafe { instance.get_physical_device_memory_properties(gpu) };
+    let memory_properties = unsafe { VULKAN.instance.get_physical_device_memory_properties(gpu) };
 
     let command_pool = {
         let pool_ci = vk::CommandPoolCreateInfo::builder()
