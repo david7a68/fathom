@@ -8,8 +8,10 @@ use crate::{
         canvas::{Canvas, Paint},
         geometry::{Extent, Offset, Point, Rect},
     },
-    shell::input::{Event, Input},
+    
 };
+
+use super::input::{Input, Event};
 
 pub trait Widget {
     fn widget_state(&self) -> &WidgetState;
@@ -78,11 +80,12 @@ pub enum PostUpdate {
 
 pub struct UpdateContext<'a> {
     input: &'a Input,
+    needs_redraw: bool,
 }
 
 impl<'a> UpdateContext<'a> {
     pub fn new(input: &'a Input) -> Self {
-        Self { input }
+        Self { input, needs_redraw: false }
     }
 
     pub fn event(&self) -> Event {
@@ -93,8 +96,9 @@ impl<'a> UpdateContext<'a> {
         self.input.cursor_position()
     }
 
-    pub fn begin(&mut self, root: &mut dyn Widget) {
+    pub fn begin(&mut self, root: &mut dyn Widget) -> bool {
         self.update(root);
+        self.needs_redraw
     }
 
     pub fn update(&mut self, widget: &mut dyn Widget) {
@@ -106,11 +110,11 @@ impl<'a> UpdateContext<'a> {
                 // no-op
             }
             PostUpdate::NeedsRedraw => {
-                // This is a no-op since we redraw the entire window every
-                // frame anyway.
+                self.needs_redraw = true;
             }
             PostUpdate::NeedsLayout => {
                 widget.widget_state_mut().set_needs_layout();
+                self.needs_redraw = true;
             }
         }
     }

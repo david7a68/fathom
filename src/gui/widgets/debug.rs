@@ -5,8 +5,7 @@ use crate::{
         canvas::Paint,
         color::Color,
         geometry::{Extent, Point, Rect},
-    },
-    shell::input::Event,
+    }, gui::input::Event,
 };
 
 use super::{

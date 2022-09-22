@@ -11,7 +11,12 @@ thiserror = "1.0"
 
 [dependencies.windows]
 version = "0.39.0"
-features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi"]
+features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
+]
 
 [build-dependencies]
 shaderc = "0.8"

@@ -1,6 +1,6 @@
 use crate::{
     gfx::geometry::{Extent, Offset, Px},
-    shell::input::Event,
+    gui::input::Event,
 };
 
 use super::{

@@ -6,7 +6,7 @@ use crate::{
         color::Color,
         geometry::{Extent, Offset, Px, Rect},
     },
-    shell::input::{ButtonState, Event, MouseButton},
+    gui::input::{Event, MouseButton},
 };
 
 use super::{
@@ -93,7 +93,7 @@ impl<W: Widget> Widget for TabbedPanel<W> {
                     for (i, child) in self.children.iter_mut().enumerate() {
                         advancing_x += child.width;
                         if cursor_x <= advancing_x {
-                            if button == MouseButton::Left && state == ButtonState::Pressed {
+                            if button == MouseButton::Left && state.is_pressed() {
                                 self.active = i;
                                 return PostUpdate::NeedsLayout;
                             }

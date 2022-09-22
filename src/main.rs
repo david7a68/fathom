@@ -1,5 +1,5 @@
 use fathom::{
-    application::{Application, WindowConfig},
+    application::{Application, AppWindowConfig},
     gfx::color::Color,
     gui::widgets::{
         debug::Fill,
@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
     );
 
-    Application::new()?.run(vec![WindowConfig {
+    Application::new()?.run(vec![AppWindowConfig {
         title: "Window #1",
         extent: None,
         widget_tree: Box::new(tree),

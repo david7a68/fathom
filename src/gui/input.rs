@@ -1,6 +1,6 @@
 use crate::gfx::geometry::Point;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 #[must_use]
 pub enum MouseButton {
@@ -27,7 +27,7 @@ impl MouseButton {
 }
 
 /// The state of a button such as a mouse button or keyboard key.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 #[must_use]
 pub enum ButtonState {
@@ -37,18 +37,16 @@ pub enum ButtonState {
 }
 
 impl ButtonState {
-    #[must_use]
-    pub fn is_pressed(&self) -> bool {
-        *self == ButtonState::Pressed
+    pub fn is_released(&self) -> bool {
+        *self == Self::Released
     }
 
-    #[must_use]
-    pub fn is_released(&self) -> bool {
-        *self == ButtonState::Released
+    pub fn is_pressed(&self) -> bool {
+        *self == Self::Pressed
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Event {
     #[default]
     None,
