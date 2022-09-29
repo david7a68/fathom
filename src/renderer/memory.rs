@@ -10,8 +10,8 @@ use ash::vk;
 use super::Error;
 
 const PAGE_SIZE: vk::DeviceSize = 4 * 1024 * 1024;
-const HOST_BLOCK_SIZE: vk::DeviceSize = 32 * 1024 * 1024;
-const DEVICE_BLOCK_SIZE: vk::DeviceSize = 128 * 1024 * 1024;
+const HOST_BLOCK_SIZE: vk::DeviceSize = 16 * 1024 * 1024;
+const DEVICE_BLOCK_SIZE: vk::DeviceSize = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
@@ -192,17 +192,12 @@ impl Memory {
         type_bits: u32,
         required_properties: vk::MemoryPropertyFlags,
     ) -> Option<u32> {
-        for i in 0..self.memory_properties.memory_type_count {
-            if (type_bits & (1 << i)) != 0
+        (0..self.memory_properties.memory_type_count).find(|&i| {
+            (type_bits & (1 << i)) != 0
                 && self.memory_properties.memory_types[i as usize]
                     .property_flags
                     .contains(required_properties)
-            {
-                return Some(i);
-            }
-        }
-
-        None
+        })
     }
 }
 
