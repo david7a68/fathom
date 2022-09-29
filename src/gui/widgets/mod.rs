@@ -3,15 +3,12 @@ pub mod layout;
 pub mod split_panel;
 pub mod tabbed_panel;
 
-use crate::{
-    gfx::{
-        canvas::{Canvas, Paint},
-        geometry::{Extent, Offset, Point, Rect},
-    },
-    
+use crate::gfx::{
+    canvas::{Canvas, Paint},
+    geometry::{Extent, Offset, Point, Rect},
 };
 
-use super::input::{Input, Event};
+use super::input::{Event, Input};
 
 pub trait Widget {
     fn widget_state(&self) -> &WidgetState;
@@ -85,7 +82,10 @@ pub struct UpdateContext<'a> {
 
 impl<'a> UpdateContext<'a> {
     pub fn new(input: &'a Input) -> Self {
-        Self { input, needs_redraw: false }
+        Self {
+            input,
+            needs_redraw: false,
+        }
     }
 
     pub fn event(&self) -> Event {

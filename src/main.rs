@@ -1,5 +1,5 @@
 use fathom::{
-    application::{Application, AppWindowConfig},
+    application::{AppWindowConfig, Application},
     gfx::color::Color,
     gui::widgets::{
         debug::Fill,

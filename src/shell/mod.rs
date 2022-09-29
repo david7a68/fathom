@@ -1,4 +1,5 @@
 pub mod event;
+
 use crate::gfx::geometry::Extent;
 
 use event::Event;

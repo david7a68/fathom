@@ -3,7 +3,7 @@ use crate::gfx::geometry::{Extent, Point};
 use super::WindowId;
 
 /// Events that can be received from the OS event loop.
-/// 
+///
 /// Note that each mouse button/state combination is included as a unique event.
 /// This is intentional, and has the benefit of reducing a branch for every
 /// mouse button event since there is no need to match on the button. In this,
@@ -15,7 +15,7 @@ pub enum Event {
     None,
     Window {
         window_id: WindowId,
-        event: Window
+        event: Window,
     },
     /// Indicates that all repaint requests for the current loop iteration have
     /// been completed. Handle this message to perform any shared post-rendering
@@ -24,7 +24,7 @@ pub enum Event {
 }
 
 /// Window-specific events that can be received from the OS event loop.
-/// 
+///
 /// Note that each mouse button/state combination is included as a unique event.
 /// This is intentional, and has the benefit of reducing a branch for every
 /// mouse button event since there is no need to match on the button. In this,
@@ -43,5 +43,5 @@ pub enum Window {
     RightMouseButtonPressed,
     RightMouseButtonReleased,
     MiddleMouseButtonPressed,
-    MiddleMouseButtonReleased
+    MiddleMouseButtonReleased,
 }
