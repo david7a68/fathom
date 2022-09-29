@@ -42,7 +42,7 @@ impl Widget for Fill {
             Event::None => PostUpdate::NoChange,
             Event::CursorMove { .. } => PostUpdate::NoChange,
             Event::MouseButton { button, state } => {
-                if button.is_left() && state.is_released() {
+                if button.is_left() && state.is_pressed() {
                     self.color = random();
                     PostUpdate::NeedsRedraw
                 } else {
