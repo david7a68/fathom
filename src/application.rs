@@ -9,7 +9,7 @@ use crate::{
     renderer::{Renderer, SwapchainHandle},
     shell::{
         event::{Event, Window as WindowEvent},
-        shl2::{OsShell, Shell, WindowConfig, WindowId},
+        {OsShell, Shell, WindowConfig, WindowId},
     },
 };
 

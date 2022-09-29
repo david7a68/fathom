@@ -1,6 +1,6 @@
 use crate::gfx::geometry::{Extent, Point};
 
-use super::shl2::WindowId;
+use super::WindowId;
 
 /// Events that can be received from the OS event loop.
 /// 
