@@ -39,6 +39,7 @@ pub struct VulkanApi {
 
     pub device: ash::Device,
     pub physical_device: vk::PhysicalDevice,
+    pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
 
     pub graphics_queue_family: u32,
     pub transfer_queue_family: u32,
@@ -210,6 +211,9 @@ impl VulkanApi {
             unsafe { instance.create_device(physical_device, &create_info, None) }?
         };
 
+        let device_memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
         let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family, 0) };
         let transfer_queue = unsafe { device.get_device_queue(transfer_queue_family, 0) };
         let present_queue = unsafe { device.get_device_queue(present_queue_family, 0) };
@@ -221,6 +225,7 @@ impl VulkanApi {
             instance,
             device,
             physical_device,
+            device_memory_properties,
             graphics_queue_family,
             transfer_queue_family,
             present_queue_family,
@@ -244,6 +249,19 @@ impl VulkanApi {
             create_info.flags |= vk::FenceCreateFlags::SIGNALED;
         }
         Ok(unsafe { self.device.create_fence(&create_info, None) }?)
+    }
+
+    pub fn find_memory_type(
+        &self,
+        type_bits: u32,
+        required_properties: vk::MemoryPropertyFlags,
+    ) -> Option<u32> {
+        (0..self.device_memory_properties.memory_type_count).find(|&i| {
+            (type_bits & (1 << i)) != 0
+                && self.device_memory_properties.memory_types[i as usize]
+                    .property_flags
+                    .contains(required_properties)
+        })
     }
 }
 

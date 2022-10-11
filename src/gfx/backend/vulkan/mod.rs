@@ -17,7 +17,7 @@ mod api;
 mod memory;
 mod swapchain;
 
-use self::{api::VulkanApi, swapchain::VulkanSwapchain};
+use self::{api::VulkanApi, memory::VulkanMemory, swapchain::VulkanSwapchain};
 
 impl From<crate::handle_pool::Error> for Error {
     fn from(e: crate::handle_pool::Error) -> Self {
@@ -45,6 +45,7 @@ impl From<Extent> for vk::Extent2D {
 
 pub struct Vulkan {
     api: VulkanApi,
+    memory: VulkanMemory,
 
     swapchains: RefCell<HandlePool<VulkanSwapchain, Swapchain, { MAX_SWAPCHAINS }>>,
     render_targets: RefCell<HandlePool<VulkanRenderTarget, RenderTarget, 64>>,
@@ -58,6 +59,7 @@ impl Vulkan {
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
             api: VulkanApi::new(true)?,
+            memory: VulkanMemory::new(),
             swapchains: RefCell::new(HandlePool::preallocate()),
             render_targets: RefCell::new(HandlePool::preallocate()),
         })
