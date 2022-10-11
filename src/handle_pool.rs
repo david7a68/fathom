@@ -252,6 +252,36 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
         }
     }
 
+    /// Retrieves the raw index of the value pointed by `handle` if the handle
+    /// is valid.
+    pub fn raw_index_of(&self, handle: Handle<KeyType>) -> Option<usize> {
+        // if the handle is valid, return some(index)
+        let slot = self.slots.get(Self::index_of(handle) as usize)?;
+        if slot.index_and_cycles == handle {
+            Some(Self::index_of(handle) as usize)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the value pointed by `index`. If the value was `remove`d at some
+    /// point since the call to `raw_index_of`, this function returns `None`.
+    /// However, it cannot guard against an `insert`-`remove`-`insert` pattern
+    /// where the second insert uses the same slot as the first.
+    /// 
+    /// ## Safety
+    ///
+    /// The index used here must have been retrieved from `raw_index_of()`
+    /// without an intermediate call to `remove()`.
+    pub unsafe fn at_index(&self, index: usize) -> Option<&Value> {
+        let slot = self.slots.get(index)?;
+        if Self::index_of(slot.index_and_cycles) == index as u32 {
+            Some(slot.value.assume_init_ref())
+        } else {
+            None
+        }
+    }
+
     /// Inserts an element into the pool, returning a handle to that element.
     pub fn insert(&mut self, value: Value) -> Result<Handle<KeyType>, Error> {
         if self.num_free_slots > 0 {

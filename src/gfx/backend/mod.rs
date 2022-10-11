@@ -37,6 +37,10 @@ use super::{
     pixel_buffer::{ColorSpace, Layout, PixelBuffer},
 };
 
+mod vulkan;
+
+const MAX_SWAPCHAINS: u32 = 64;
+
 /// An image to which render operations may write to.
 pub struct RenderTarget {}
 
