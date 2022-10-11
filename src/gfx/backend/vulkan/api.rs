@@ -39,6 +39,7 @@ pub struct VulkanApi {
 
     pub device: ash::Device,
     pub physical_device: vk::PhysicalDevice,
+    pub pipeline_cache: vk::PipelineCache,
     pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
 
     pub graphics_queue_family: u32,
@@ -214,6 +215,11 @@ impl VulkanApi {
         let device_memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
+        let pipeline_cache = {
+            let create_info = vk::PipelineCacheCreateInfo::default();
+            unsafe { device.create_pipeline_cache(&create_info, None) }?
+        };
+
         let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family, 0) };
         let transfer_queue = unsafe { device.get_device_queue(transfer_queue_family, 0) };
         let present_queue = unsafe { device.get_device_queue(present_queue_family, 0) };
@@ -226,6 +232,7 @@ impl VulkanApi {
             device,
             physical_device,
             device_memory_properties,
+            pipeline_cache,
             graphics_queue_family,
             transfer_queue_family,
             present_queue_family,

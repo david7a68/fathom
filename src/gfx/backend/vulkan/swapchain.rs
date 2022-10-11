@@ -8,10 +8,10 @@ use crate::gfx::{
     geometry::Extent,
 };
 
-use super::api::VulkanApi;
+use super::{api::VulkanApi, HDR_FORMAT, SDR_FORMAT};
 
 const FRAMES_IN_FLIGHT: usize = 2;
-const PREFERRED_NUM_IMAGES: usize = 2;
+pub const PREFERRED_NUM_IMAGES: usize = 2;
 
 #[derive(Clone)]
 pub struct FrameSync {
@@ -41,11 +41,6 @@ impl FrameSync {
     }
 }
 
-pub struct Frame {
-    pub sync: FrameSync,
-    pub image_view: vk::ImageView,
-}
-
 pub struct VulkanSwapchain {
     inner: SwapchainInner,
     current_frame: Cell<u64>,
@@ -62,12 +57,6 @@ impl VulkanSwapchain {
             current_image: None,
             frames: [FrameSync::new(api)?, FrameSync::new(api)?],
         })
-    }
-
-    pub fn wait_idle(&self, api: &VulkanApi) -> Result<(), Error> {
-        let fences = [self.frames[0].submit_fence, self.frames[1].submit_fence];
-        unsafe { api.device.wait_for_fences(&fences, true, u64::MAX) }?;
-        Ok(())
     }
 
     pub fn destroy(mut self, api: &VulkanApi) -> Result<(), Error> {
@@ -87,8 +76,31 @@ impl VulkanSwapchain {
         }
     }
 
+    pub fn wait_idle(&self, api: &VulkanApi) -> Result<(), Error> {
+        let fences = [self.frames[0].submit_fence, self.frames[1].submit_fence];
+        unsafe { api.device.wait_for_fences(&fences, true, u64::MAX) }?;
+        Ok(())
+    }
+
+    pub fn current_image(&self) -> Option<vk::ImageView> {
+        let index = self.current_image?;
+        Some(self.inner.image_views[index as usize])
+    }
+
+    pub fn image_views(&self) -> &[vk::ImageView] {
+        &self.inner.image_views
+    }
+
+    pub fn extent(&self) -> vk::Extent2D {
+        self.inner.extent
+    }
+
+    /// Resizes the swapchain's images. This invalidates the result of any
+    /// previous call to `get_next_image()`.
     pub fn resize(&mut self, api: &VulkanApi, new_size: Extent) -> Result<(), Error> {
+        self.wait_idle(api)?;
         self.inner.update(new_size.into(), api)?;
+        self.current_image = None;
         Ok(())
     }
 
@@ -177,7 +189,7 @@ impl VulkanSwapchain {
 struct SwapchainInner {
     handle: vk::SwapchainKHR,
     surface: vk::SurfaceKHR,
-    format: vk::SurfaceFormatKHR,
+    extent: vk::Extent2D,
     image_views: SmallVec<[vk::ImageView; PREFERRED_NUM_IMAGES]>,
 }
 
@@ -245,16 +257,20 @@ impl SwapchainInner {
                     .get_physical_device_surface_formats(api.physical_device, surface)
             }?;
 
-            let mut rgb8_srgb = None;
+            let mut sdr = None;
+            let mut hdr = None;
             for format in available {
                 match format.color_space {
-                    vk::ColorSpaceKHR::SRGB_NONLINEAR => match format.format {
-                        vk::Format::R8G8B8_SRGB | vk::Format::B8G8R8A8_SRGB => {
-                            rgb8_srgb = rgb8_srgb.or(Some(format));
+                    vk::ColorSpaceKHR::SRGB_NONLINEAR => {
+                        if SDR_FORMAT == format.format {
+                            sdr = sdr.or(Some(format));
                         }
-                        _ => {}
-                    },
-                    vk::ColorSpaceKHR::BT2020_LINEAR_EXT => {}
+                    }
+                    vk::ColorSpaceKHR::BT2020_LINEAR_EXT => {
+                        if HDR_FORMAT == format.format {
+                            hdr = hdr.or(Some(format));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -262,7 +278,7 @@ impl SwapchainInner {
             // if let Some(format) = rgb16f_bt2020 {
             //     format
             // } else
-            if let Some(format) = rgb8_srgb {
+            if let Some(format) = sdr {
                 format
             } else {
                 panic!("no srgb format found")
@@ -345,7 +361,7 @@ impl SwapchainInner {
         Ok(Self {
             handle,
             surface,
-            format,
+            extent: image_extent,
             image_views,
         })
     }

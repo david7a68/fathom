@@ -26,7 +26,7 @@ use crate::{
 use super::api::VulkanApi;
 
 // 64k
-const BUFFER_BLOCK_SIZE: vk::DeviceSize = 64 * 1024;
+pub const BUFFER_BLOCK_SIZE: vk::DeviceSize = 64 * 1024;
 // 4986k (4m)
 const SLAB_ALLOCATION_SIZE: vk::DeviceSize = (u64::BITS as vk::DeviceSize) * BUFFER_BLOCK_SIZE;
 // 1024 * 64k = 64m
