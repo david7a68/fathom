@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use crate::{
-    gfx::geometry::Extent,
+    gfx::{geometry::Extent, init_gfx, DrawCommandList, Swapchain},
     gui::{
         input::{ButtonState, Input, MouseButton},
         widgets::{DrawContext, LayoutContext, UpdateContext, Widget},
     },
-    renderer::{Renderer, SwapchainHandle},
+    handle_pool::Handle,
     shell::{
         event::{Event, Window as WindowEvent},
         {OsShell, Shell, WindowConfig, WindowId},
@@ -15,8 +15,8 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("an internal renderer error occurred")]
-    Renderer(#[from] crate::renderer::Error),
+    #[error("an internal graphics error occurred")]
+    Renderer(#[from] crate::gfx::Error),
 }
 
 pub struct AppWindowConfig<'a> {
@@ -34,7 +34,9 @@ impl Application {
 
     pub fn run(&mut self, configs: Vec<AppWindowConfig>) {
         let shell = OsShell::initialize();
-        let mut renderer = Renderer::new().unwrap();
+        let gfx = init_gfx().unwrap();
+
+        let mut draw_commands = DrawCommandList::new();
 
         // TODO(straivers): for efficiency, we really should find a way to bind
         // AppWindow to the HWND directly.
@@ -48,7 +50,8 @@ impl Application {
                 })
                 .unwrap();
 
-            let swapchain = renderer.create_swapchain(shell.hwnd(window_id)).unwrap();
+            // let swapchain = renderer.create_swapchain(shell.hwnd(window_id)).unwrap();
+            let swapchain = gfx.create_swapchain(shell.hwnd(window_id)).unwrap();
 
             windows.insert(
                 window_id,
@@ -83,7 +86,7 @@ impl Application {
                         }
                         WindowEvent::Destroyed => {
                             let window = windows.remove(&window_id).unwrap();
-                            renderer.destroy_swapchain(window.swapchain).unwrap();
+                            gfx.destroy_swapchain(window.swapchain).unwrap();
                             std::mem::drop(window);
                             control.exit();
                         }
@@ -92,6 +95,8 @@ impl Application {
                         }
                         WindowEvent::Resized { inner_extent } => {
                             window.extent = inner_extent;
+                            gfx.resize_swapchain(window.swapchain, inner_extent)
+                                .unwrap();
                             window.needs_repaint = true;
                         }
                         WindowEvent::CursorMoved { position } => {
@@ -104,10 +109,14 @@ impl Application {
                                 LayoutContext::default()
                                     .begin(window.widget_tree.as_mut(), window.extent);
 
-                                let mut canvas = renderer.begin_frame(window.swapchain).unwrap();
-                                let mut draw_context = DrawContext::new(&mut canvas);
+                                draw_commands.clear();
+                                let target =
+                                    gfx.get_next_swapchain_image(window.swapchain).unwrap();
+                                let mut draw_context = DrawContext::new(&mut draw_commands);
                                 draw_context.draw(window.widget_tree.as_ref());
-                                renderer.submit(canvas).unwrap();
+                                gfx.draw(target, &draw_commands).unwrap();
+                                gfx.destroy_render_target(target).unwrap();
+                                gfx.present_swapchain_images(&[window.swapchain]).unwrap();
                                 window.needs_repaint = false;
                             }
                         }
@@ -171,7 +180,7 @@ impl Application {
 
 struct AppWindow {
     extent: Extent,
-    swapchain: SwapchainHandle,
+    swapchain: Handle<Swapchain>,
     input: Input,
     widget_tree: Box<dyn Widget>,
     needs_repaint: bool,

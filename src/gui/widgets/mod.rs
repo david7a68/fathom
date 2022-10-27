@@ -4,8 +4,8 @@ pub mod split_panel;
 pub mod tabbed_panel;
 
 use crate::gfx::{
-    canvas::{Canvas, Paint},
     geometry::{Extent, Offset, Point, Rect},
+    DrawCommandList, Paint,
 };
 
 use super::input::{Event, Input};
@@ -206,14 +206,14 @@ impl LayoutContext {
 }
 
 pub struct DrawContext<'a> {
-    canvas: &'a mut dyn Canvas,
+    draw_commands: &'a mut DrawCommandList,
     current_offset: Offset,
 }
 
 impl<'a> DrawContext<'a> {
-    pub fn new(canvas: &'a mut dyn Canvas) -> Self {
+    pub fn new(draw_commands: &'a mut DrawCommandList) -> Self {
         Self {
-            canvas,
+            draw_commands,
             current_offset: Offset::zero(),
         }
     }
@@ -235,7 +235,7 @@ impl<'a> DrawContext<'a> {
     pub fn draw_rect(&mut self, rect: Rect, paint: &Paint) {
         // convert the rect into absolute coordinates
         let rect = rect + self.current_offset;
-        self.canvas.draw_rect(rect, paint);
+        self.draw_commands.draw_rect(rect, *paint);
     }
 }
 

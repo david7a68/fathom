@@ -2,9 +2,9 @@ use rand::random;
 
 use crate::{
     gfx::{
-        canvas::Paint,
         color::Color,
         geometry::{Extent, Offset, Px, Rect},
+        Paint,
     },
     gui::input::{Event, MouseButton},
 };

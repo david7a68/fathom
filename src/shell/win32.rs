@@ -9,7 +9,7 @@ use windows::{
     core::PCWSTR,
     Win32::{
         Foundation::{GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
-        Graphics::Gdi::ValidateRect,
+        Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
@@ -499,17 +499,12 @@ fn wndproc(shell: &Rc<Inner>, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPAR
                         }),
                     );
 
-                    // NOTE(straivers):
-                    //
-                    // Validating the window rect causes Windows to stop sending
-                    // WM_PAINT messages if nothing is happening and GetMessage
-                    // is used.
-                    //
-                    // Quick testing on 2022-09-29 (Win11), showed that the
-                    // window will use up as much as 10% of the CPU without this
-                    // call. The exact reason is unclear, but I'm content to
-                    // leave this for now.
-                    unsafe { ValidateRect(hwnd, std::ptr::null()) };
+                    unsafe {
+                        let mut ps = PAINTSTRUCT::default();
+                        BeginPaint(hwnd, &mut ps);
+                        EndPaint(hwnd, &ps);
+                    }
+
                     LRESULT(0)
                 }
                 _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },

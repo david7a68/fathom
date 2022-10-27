@@ -45,6 +45,22 @@ impl<T> std::fmt::Debug for Handle<T> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RawIndex(u32);
+
+impl From<RawIndex> for usize {
+    fn from(ri: RawIndex) -> Self {
+        ri.0 as usize
+    }
+}
+
+impl std::ops::Add<u32> for RawIndex {
+    type Output = Self;
+    fn add(self, rhs: u32) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
 /// Errors that may occur when working with [`HandlePool`]s.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
@@ -94,6 +110,14 @@ struct Slot<Value, KeyType> {
     value: MaybeUninit<Value>,
 }
 
+struct IndexAndCycles(u32);
+
+impl<T> PartialEq<Handle<T>> for IndexAndCycles {
+    fn eq(&self, other: &Handle<T>) -> bool {
+        self.0 == other.value
+    }
+}
+
 /// An object pool that uses opaque handles instead of pointers. The pool
 /// behaves like a fixed-size slab allocator with the added benefit that every
 /// single handle returned by the pool will be unique. These handles are weak
@@ -138,7 +162,7 @@ struct Slot<Value, KeyType> {
 /// max_cycles = 2 ^ (u32::NUM_BITS - bits(max_elements))
 /// ```
 pub struct HandlePool<Value, KeyType, const MIN_ELEMENTS: u32> {
-    first_free_slot: u32,
+    first_free_slot: RawIndex,
 
     num_free_slots: u32,
 
@@ -180,7 +204,7 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
     /// memory.
     pub fn preallocate() -> Self {
         Self {
-            first_free_slot: 0,
+            first_free_slot: RawIndex(0),
             num_free_slots: 0,
             num_retired_slots: 0,
             slots: Vec::with_capacity(Self::MAX_ELEMENTS),
@@ -192,7 +216,7 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
     /// `initial_capacity` and `MIN_ELEMENTS` as it may consume a lot of memory.
     pub fn preallocate_n(initial_capacity: usize) -> Self {
         Self {
-            first_free_slot: 0,
+            first_free_slot: RawIndex(0),
             num_free_slots: 0,
             num_retired_slots: 0,
             slots: Vec::with_capacity(std::cmp::min(Self::MAX_ELEMENTS, initial_capacity)),
@@ -224,7 +248,7 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
 
     /// Checks if the handle is valid.
     pub fn contains(&self, handle: Handle<KeyType>) -> bool {
-        if let Some(slot) = self.slots.get(Self::index_of(handle) as usize) {
+        if let Some(slot) = self.slots.get(usize::from(Self::index_of(handle))) {
             slot.index_and_cycles == handle
         } else {
             false
@@ -233,7 +257,7 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
 
     /// Borrows a reference to the element identified by `handle` if it exists.
     pub fn get(&self, handle: Handle<KeyType>) -> Option<&Value> {
-        let slot = self.slots.get(Self::index_of(handle) as usize)?;
+        let slot = self.slots.get(usize::from(Self::index_of(handle)))?;
         if slot.index_and_cycles == handle {
             Some(unsafe { slot.value.assume_init_ref() })
         } else {
@@ -244,7 +268,7 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
     /// Mutably borrows a reference to the element identified by `handle` if it
     /// exists.
     pub fn get_mut(&mut self, handle: Handle<KeyType>) -> Option<&mut Value> {
-        let slot = self.slots.get_mut(Self::index_of(handle) as usize)?;
+        let slot = self.slots.get_mut(usize::from(Self::index_of(handle)))?;
         if slot.index_and_cycles == handle {
             Some(unsafe { slot.value.assume_init_mut() })
         } else {
@@ -254,11 +278,11 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
 
     /// Retrieves the raw index of the value pointed by `handle` if the handle
     /// is valid.
-    pub fn raw_index_of(&self, handle: Handle<KeyType>) -> Option<usize> {
+    pub fn raw_index_of(&self, handle: Handle<KeyType>) -> Option<RawIndex> {
         // if the handle is valid, return some(index)
-        let slot = self.slots.get(Self::index_of(handle) as usize)?;
+        let slot = self.slots.get(usize::from(Self::index_of(handle)))?;
         if slot.index_and_cycles == handle {
-            Some(Self::index_of(handle) as usize)
+            Some(Self::index_of(handle))
         } else {
             None
         }
@@ -268,18 +292,90 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
     /// point since the call to `raw_index_of`, this function returns `None`.
     /// However, it cannot guard against an `insert`-`remove`-`insert` pattern
     /// where the second insert uses the same slot as the first.
-    /// 
+    ///
     /// ## Safety
     ///
     /// The index used here must have been retrieved from `raw_index_of()`
     /// without an intermediate call to `remove()`.
-    pub unsafe fn at_index(&self, index: usize) -> Option<&Value> {
-        let slot = self.slots.get(index)?;
-        if Self::index_of(slot.index_and_cycles) == index as u32 {
+    pub unsafe fn get_at(&self, index: RawIndex) -> Option<&Value> {
+        let slot = self.slots.get(usize::from(index))?;
+        if Self::index_of(slot.index_and_cycles) == index {
             Some(slot.value.assume_init_ref())
         } else {
             None
         }
+    }
+
+    /// ## Safety
+    ///
+    /// The index used here must have been retrieved from `raw_index_of()`
+    /// without an intermediate call to `remove()` or `remove_at()`. Once this
+    /// function returns, all handles to the value are invalidated, and the
+    /// index must not be used again unless it is returned by a subsequent call
+    /// to `raw_index_of()`.
+    pub unsafe fn remove_at(&mut self, index: RawIndex) -> Option<Value> {
+        let slot = self.slots.get_mut(usize::from(index)).unwrap();
+        if Self::index_of(slot.index_and_cycles) == index {
+            let mut value = MaybeUninit::uninit();
+            std::mem::swap(&mut value, &mut slot.value);
+
+            if !Self::is_saturated(slot.index_and_cycles) {
+                Self::increment_cycle(&mut slot.index_and_cycles);
+                Self::set_index(
+                    &mut slot.index_and_cycles,
+                    if self.first_free_slot == index {
+                        index + 1
+                    } else {
+                        self.first_free_slot
+                    },
+                );
+                self.first_free_slot = index;
+                self.num_free_slots += 1;
+            } else {
+                self.num_retired_slots += 1;
+            }
+
+            // SAFETY: We have determined that the slot is valid and have
+            // invalidated the handle.
+            Some(value.assume_init())
+        } else {
+            None
+        }
+    }
+
+    /// ## Safety
+    ///
+    /// The index used here must have been retrieved from `raw_index_of()`
+    /// without an intermediate call to `remove()` or `remove_at()`. Once this
+    /// function returns, all handles to the value are invalidated, and the
+    /// index must not be used again unless it is returned by a subsequent call
+    /// to `raw_index_of()`.
+    pub unsafe fn remove_at_unchecked(&mut self, index: RawIndex) -> Value {
+        let slot = self.slots.get_mut(usize::from(index)).unwrap();
+        // check that the value is initialized is omitted
+        let mut value = MaybeUninit::uninit();
+        std::mem::swap(&mut value, &mut slot.value);
+
+        if !Self::is_saturated(slot.index_and_cycles) {
+            Self::increment_cycle(&mut slot.index_and_cycles);
+            Self::set_index(
+                &mut slot.index_and_cycles,
+                if self.first_free_slot == index {
+                    index + 1
+                } else {
+                    self.first_free_slot
+                },
+            );
+            self.first_free_slot = index;
+            self.num_free_slots += 1;
+        } else {
+            self.num_retired_slots += 1;
+        }
+
+        // SAFETY: We have NOT determined that the slot is valid and have
+        // invalidated the handle. It is up to the caller to ensure that the
+        // index contains a valid value.
+        value.assume_init()
     }
 
     /// Inserts an element into the pool, returning a handle to that element.
@@ -287,7 +383,7 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
         if self.num_free_slots > 0 {
             let slot_index = self.first_free_slot;
 
-            let slot = &mut self.slots[slot_index as usize];
+            let slot = &mut self.slots[usize::from(slot_index)];
             self.first_free_slot = Self::index_of(slot.index_and_cycles);
             Self::set_index(&mut slot.index_and_cycles, slot_index);
             slot.value = MaybeUninit::new(value);
@@ -318,7 +414,7 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
     /// returns it to the caller.
     pub fn remove(&mut self, handle: Handle<KeyType>) -> Option<Value> {
         let index = Self::index_of(handle);
-        let slot = self.slots.get_mut(index as usize)?;
+        let slot = self.slots.get_mut(usize::from(index))?;
         if slot.index_and_cycles == handle {
             let mut value = MaybeUninit::uninit();
             std::mem::swap(&mut value, &mut slot.value);
@@ -358,8 +454,8 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
     }
 
     #[inline]
-    fn index_of(handle: Handle<KeyType>) -> u32 {
-        handle.value & Self::INDEX_MASK
+    fn index_of(handle: Handle<KeyType>) -> RawIndex {
+        RawIndex(handle.value & Self::INDEX_MASK)
     }
 
     #[inline]
@@ -373,28 +469,28 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> HandlePool<Value, KeyType, MIN_ELE
     }
 
     #[inline]
-    fn split(handle: Handle<KeyType>) -> (u32, u32) {
+    fn split(handle: Handle<KeyType>) -> (RawIndex, u32) {
         (Self::index_of(handle), Self::generation_of(handle))
     }
 
     #[inline]
-    fn set_index(handle: &mut Handle<KeyType>, index: u32) {
-        assert!(index < (1 << Self::INDEX_BITS));
-        handle.value = (handle.value & Self::CYCLE_MASK) | (index)
+    fn set_index(handle: &mut Handle<KeyType>, index: RawIndex) {
+        assert!(index.0 < (1 << Self::INDEX_BITS));
+        handle.value = (handle.value & Self::CYCLE_MASK) | (index.0)
     }
 
     #[inline]
     fn increment_cycle(handle: &mut Handle<KeyType>) {
         debug_assert!(!Self::is_saturated(*handle));
         handle.value = (handle.value & Self::CYCLE_MASK).saturating_add(1 << Self::INDEX_BITS)
-            | Self::index_of(*handle);
+            | Self::index_of(*handle).0;
     }
 }
 
 impl<Value, KeyType, const MIN_ELEMENTS: u32> Default for HandlePool<Value, KeyType, MIN_ELEMENTS> {
     fn default() -> Self {
         Self {
-            first_free_slot: 0,
+            first_free_slot: RawIndex(0),
             num_free_slots: 0,
             num_retired_slots: 0,
             slots: vec![],
@@ -407,7 +503,7 @@ impl<Value, KeyType, const MIN_ELEMENTS: u32> Drop for HandlePool<Value, KeyType
         for (i, mut slot) in self.slots.drain(..).enumerate() {
             let (index, generation) = Self::split(slot.index_and_cycles);
 
-            if i == index as usize && generation < Self::MAX_CYCLES {
+            if i == index.into() && generation < Self::MAX_CYCLES {
                 // SAFETY: As per documentation on `Slot`, we have confirmed
                 // that the slot's index points to itself.
                 unsafe { slot.value.assume_init_drop() };
@@ -434,7 +530,7 @@ mod tests {
 
             while chain_length < pool.num_free_slots {
                 let (index, generation) = HandlePool::<Value, KeyType, MIN_ELEMENTS>::split(
-                    pool.slots[current as usize].index_and_cycles,
+                    pool.slots[usize::from(current)].index_and_cycles,
                 );
                 assert_ne!(
                     index, current,
