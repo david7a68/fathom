@@ -277,6 +277,10 @@ pub trait GfxDevice {
         render_target: Handle<RenderTarget>,
         commands: &DrawCommandList,
     ) -> Result<(), Error>;
+
+    /// Flushes all work from the device. This stalls the backend and can hurt
+    /// performance.
+    fn flush(&self);
 }
 
 pub fn init_gfx() -> Result<Box<dyn GfxDevice>, Error> {

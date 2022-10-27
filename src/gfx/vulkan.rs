@@ -378,6 +378,10 @@ impl GfxDevice for Vulkan {
             }
         }
     }
+
+    fn flush(&self) {
+        unsafe { self.device.device_wait_idle() }.unwrap();
+    }
 }
 
 /// Literally, a thing that can be rendered to.
@@ -1344,7 +1348,7 @@ impl Vertex {
 
 /// Helper used to check if required and optional layers and extensions exist
 /// within a set of items.
-/// 
+///
 /// Returns `None` if one or more required names could not be found, or else
 /// returns all the required names as well as every optional name that was
 /// found.

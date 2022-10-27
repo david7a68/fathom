@@ -174,8 +174,8 @@ impl Application {
                     }
                 }
                 Event::RepaintComplete => {
-
-                    // flipping swapchains goes here!
+                    // ugly, but seems to improve the smoothness of window resizes... what to do?
+                    gfx.flush();
                 }
             }
         });
