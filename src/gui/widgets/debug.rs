@@ -13,6 +13,7 @@ use super::{
     BoxConstraint, DrawContext, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState,
 };
 
+#[must_use]
 pub struct Fill {
     widget_state: WidgetState,
     pub color: Color,
@@ -40,8 +41,7 @@ impl Widget for Fill {
 
     fn accept_update(&mut self, context: &mut UpdateContext) -> PostUpdate {
         match context.event() {
-            Event::None => PostUpdate::NoChange,
-            Event::CursorMove { .. } => PostUpdate::NoChange,
+            Event::None | Event::CursorMove { .. } => PostUpdate::NoChange,
             Event::MouseButton { button, state } => {
                 if button.is_left() && state.is_pressed() {
                     self.color = random();

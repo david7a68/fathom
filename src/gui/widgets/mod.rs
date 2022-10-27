@@ -10,6 +10,7 @@ use crate::gfx::{
 
 use super::input::{Event, Input};
 
+#[must_use]
 pub trait Widget {
     fn widget_state(&self) -> &WidgetState;
 
@@ -46,7 +47,7 @@ impl Widget for Box<dyn Widget> {
 
     #[inline]
     fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
-        self.as_mut().for_each_child_mut(f)
+        self.as_mut().for_each_child_mut(f);
     }
 
     #[inline]
@@ -75,6 +76,7 @@ pub enum PostUpdate {
     NeedsLayout,
 }
 
+#[must_use]
 pub struct UpdateContext<'a> {
     input: &'a Input,
     needs_redraw: bool,
@@ -92,10 +94,12 @@ impl<'a> UpdateContext<'a> {
         self.input.event()
     }
 
+    #[must_use]
     pub fn cursor_position(&self) -> Point {
         self.input.cursor_position()
     }
 
+    #[must_use]
     pub fn begin(&mut self, root: &mut dyn Widget) -> bool {
         self.update(root);
         self.needs_redraw
@@ -129,10 +133,17 @@ impl<'a> UpdateContext<'a> {
     }
 }
 
+#[must_use]
 #[derive(Default)]
 pub struct LayoutContext {}
 
 impl LayoutContext {
+    /// Computes the layout of a widget tree with `root` at its root.
+    ///
+    /// ## Panics
+    ///
+    /// This function will panic if `root` is not in fact the root of a widget
+    /// tree.
     pub fn begin(&mut self, root: &mut dyn Widget, window_extent: Extent) {
         assert!(root.widget_state().offset() == Offset::zero());
 
@@ -205,6 +216,7 @@ impl LayoutContext {
     }
 }
 
+#[must_use]
 pub struct DrawContext<'a> {
     draw_commands: &'a mut DrawCommandList,
     current_offset: Offset,
@@ -239,6 +251,7 @@ impl<'a> DrawContext<'a> {
     }
 }
 
+#[must_use]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BoxConstraint {
     min: Extent,
@@ -254,6 +267,7 @@ impl BoxConstraint {
     }
 
     /// Computes the largest extent that fits within the given constraints.
+    #[must_use]
     pub fn max_fit(&self, extent: Extent) -> Extent {
         Extent {
             width: self.min.width.max(extent.width.min(self.max.width)),

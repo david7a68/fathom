@@ -8,6 +8,7 @@ pub enum Layout {
 }
 
 impl Layout {
+    #[must_use]
     pub fn bytes_per_pixel(&self) -> usize {
         match self {
             Layout::RGB8 => 3,
@@ -22,6 +23,7 @@ pub enum ColorSpace {
     Srgb,
 }
 
+#[must_use]
 pub struct PixelBuffer {
     layout: Layout,
     color_space: ColorSpace,
@@ -41,23 +43,27 @@ impl PixelBuffer {
         Self {
             layout,
             color_space,
-            extent,
             bytes,
+            extent,
         }
     }
 
+    #[must_use]
     pub fn layout(&self) -> Layout {
         self.layout
     }
 
+    #[must_use]
     pub fn color_space(&self) -> ColorSpace {
         self.color_space
     }
 
+    #[must_use]
     pub fn extent(&self) -> Extent {
         self.extent
     }
 
+    #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }

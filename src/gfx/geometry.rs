@@ -4,7 +4,6 @@
 /// It is important to note that conversions from floats always round towards 0.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-#[must_use]
 pub struct Px(pub i16);
 
 impl From<Px> for f32 {
@@ -61,14 +60,14 @@ impl std::ops::SubAssign for Px {
 impl std::ops::Mul<f32> for Px {
     type Output = Px;
     fn mul(self, other: f32) -> Self::Output {
-        (self.0 as f32 * other).into()
+        (f32::from(self.0) * other).into()
     }
 }
 
 impl std::ops::Mul<Px> for f32 {
     type Output = Px;
     fn mul(self, other: Px) -> Self::Output {
-        (self * other.0 as f32).into()
+        (self * f32::from(other.0)).into()
     }
 }
 
@@ -88,13 +87,13 @@ impl std::ops::Rem<i16> for Px {
 
 impl std::cmp::PartialEq<i32> for Px {
     fn eq(&self, other: &i32) -> bool {
-        self.0 as i32 == *other
+        i32::from(self.0) == *other
     }
 }
 
 impl std::cmp::PartialOrd<i32> for Px {
     fn partial_cmp(&self, other: &i32) -> Option<std::cmp::Ordering> {
-        (self.0 as i32).partial_cmp(other)
+        (i32::from(self.0)).partial_cmp(other)
     }
 }
 
@@ -103,17 +102,18 @@ impl std::cmp::PartialOrd<i32> for Px {
 /// window.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[must_use]
 pub struct Point {
     pub x: Px,
     pub y: Px,
 }
 
 impl Point {
+    #[must_use]
     pub fn zero() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn within(&self, rect: &Rect) -> bool {
         rect.contains(*self)
     }
@@ -215,17 +215,18 @@ impl std::ops::SubAssign for Offset {
 /// The size of a 2D rectangle. It is never negative.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[must_use]
 pub struct Extent {
     pub width: Px,
     pub height: Px,
 }
 
 impl Extent {
+    #[must_use]
     pub fn zero() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn area(&self) -> usize {
         (self.width.0 * self.height.0) as usize
     }
@@ -243,7 +244,6 @@ impl From<Offset> for Extent {
 /// A 2D rectangle. All coordinates are in pixels and may be negative (outside
 /// the window).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[must_use]
 pub struct Rect {
     pub top: Px,
     pub left: Px,
@@ -252,6 +252,7 @@ pub struct Rect {
 }
 
 impl Rect {
+    #[must_use]
     pub fn new(point: Point, extent: Extent) -> Self {
         Rect {
             top: point.y,
@@ -261,10 +262,12 @@ impl Rect {
         }
     }
 
+    #[must_use]
     pub fn zero() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn top_left(&self) -> Point {
         Point {
             x: self.left,
@@ -272,6 +275,7 @@ impl Rect {
         }
     }
 
+    #[must_use]
     pub fn top_right(&self) -> Point {
         Point {
             x: self.right,
@@ -279,6 +283,7 @@ impl Rect {
         }
     }
 
+    #[must_use]
     pub fn bottom_left(&self) -> Point {
         Point {
             x: self.left,
@@ -286,6 +291,7 @@ impl Rect {
         }
     }
 
+    #[must_use]
     pub fn bottom_right(&self) -> Point {
         Point {
             x: self.right,
@@ -293,10 +299,12 @@ impl Rect {
         }
     }
 
+    #[must_use]
     pub fn width(&self) -> Px {
         self.right - self.left
     }
 
+    #[must_use]
     pub fn extent(&self) -> Extent {
         Extent {
             width: self.width(),
@@ -304,6 +312,7 @@ impl Rect {
         }
     }
 
+    #[must_use]
     pub fn contains(&self, point: Point) -> bool {
         self.left <= point.x
             && point.x < self.right

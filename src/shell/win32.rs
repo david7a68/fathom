@@ -150,12 +150,13 @@ impl OsShell {
             }
 
             while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.into() {
-                match msg.message {
-                    WM_QUIT => break 'evt,
-                    _ => unsafe {
-                        TranslateMessage(&msg);
-                        DispatchMessageW(&msg);
-                    },
+                if msg.message == WM_QUIT {
+                    break 'evt;
+                }
+
+                unsafe {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
                 }
             }
 
@@ -208,6 +209,7 @@ pub(super) struct Inner {
     windows: RefCell<Vec<HWND>>,
     is_shutting_down: Cell<bool>,
     event_mode: Cell<EventLoopControl>,
+    #[allow(clippy::type_complexity)]
     event_callback:
         RefCell<Option<Box<dyn FnMut(Event, &dyn super::Shell, &mut EventLoopControl)>>>,
 }
@@ -379,6 +381,7 @@ unsafe extern "system" fn unsafe_wndproc(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn wndproc(shell: &Rc<Inner>, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let window_id = hwnd.into();
 
@@ -387,7 +390,7 @@ fn wndproc(shell: &Rc<Inner>, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPAR
             let rect: RECT = {
                 let mut rect = RECT::default();
                 unsafe {
-                    GetClientRect(hwnd, &mut rect as *mut _);
+                    GetClientRect(hwnd, std::ptr::addr_of_mut!(rect));
                 }
                 rect
             };

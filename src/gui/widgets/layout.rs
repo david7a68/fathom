@@ -7,6 +7,7 @@ use super::{
     BoxConstraint, DrawContext, LayoutContext, PostUpdate, UpdateContext, Widget, WidgetState,
 };
 
+#[must_use]
 pub struct Center<W: Widget + 'static> {
     widget_state: WidgetState,
     pub child: W,
@@ -55,6 +56,7 @@ impl<W: Widget + 'static> Widget for Center<W> {
     }
 }
 
+#[must_use]
 pub struct Column<W: Widget> {
     widget_state: WidgetState,
     children: Vec<W>,
@@ -200,6 +202,7 @@ impl<W: Widget> Widget for Column<W> {
     }
 }
 
+#[must_use]
 pub struct SizedBox<W: Widget> {
     widget_state: WidgetState,
     pub extent: Extent,

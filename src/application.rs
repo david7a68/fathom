@@ -25,13 +25,16 @@ pub struct AppWindowConfig<'a> {
     pub widget_tree: Box<dyn Widget>,
 }
 
+#[derive(Default)]
 pub struct Application {}
 
 impl Application {
-    pub fn new() -> Result<Self, Error> {
-        Ok(Self {})
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn run(&mut self, configs: Vec<AppWindowConfig>) {
         let shell = OsShell::initialize();
         let gfx = init_gfx().unwrap();
@@ -171,6 +174,7 @@ impl Application {
                     }
                 }
                 Event::RepaintComplete => {
+
                     // flipping swapchains goes here!
                 }
             }

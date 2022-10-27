@@ -29,7 +29,6 @@ impl MouseButton {
 /// The state of a button such as a mouse button or keyboard key.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-#[must_use]
 pub enum ButtonState {
     #[default]
     Released,
@@ -37,15 +36,18 @@ pub enum ButtonState {
 }
 
 impl ButtonState {
+    #[must_use]
     pub fn is_released(&self) -> bool {
         *self == Self::Released
     }
 
+    #[must_use]
     pub fn is_pressed(&self) -> bool {
         *self == Self::Pressed
     }
 }
 
+#[must_use]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Event {
     #[default]
@@ -77,7 +79,6 @@ impl Input {
         self.event = Event::None;
     }
 
-    #[must_use]
     pub fn event(&self) -> Event {
         self.event
     }
@@ -89,6 +90,7 @@ impl Input {
         self.cursor_position.1 == self.tick
     }
 
+    #[must_use]
     pub fn cursor_position(&self) -> Point {
         self.cursor_position.0
     }
@@ -105,6 +107,7 @@ impl Input {
         self.mouse_buttons[button as usize].1 == self.tick
     }
 
+    #[must_use]
     pub fn mouse_button_state(&self, button: MouseButton) -> ButtonState {
         self.mouse_buttons[button as usize].0
     }

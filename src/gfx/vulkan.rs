@@ -866,6 +866,7 @@ impl Shader {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn create_shader(api: &Vulkan, format: vk::Format) -> Result<Shader, vk::Result> {
     let layout = {
         let push_constant_range = [vk::PushConstantRange::builder()
@@ -1047,7 +1048,7 @@ fn create_shader(api: &Vulkan, format: vk::Format) -> Result<Shader, vk::Result>
     })
 }
 
-/// Utility struct for a VkBuffer suitable for vertices and indices.
+/// Utility struct for a `VkBuffer` suitable for vertices and indices.
 struct GeometryBuffer {
     handle: vk::Buffer,
     memory: vk::DeviceMemory,
@@ -1268,7 +1269,7 @@ fn write_command_buffer(
         match command {
             super::Command::Scissor { rect } => unsafe {
                 api.device
-                    .cmd_set_scissor(command_buffer, 0, &[vk::Rect2D::from(*rect)])
+                    .cmd_set_scissor(command_buffer, 0, &[vk::Rect2D::from(*rect)]);
             },
             super::Command::Polygon {
                 first_index,
@@ -1292,9 +1293,9 @@ fn write_command_buffer(
 
                 api.device.cmd_draw_indexed(
                     command_buffer,
-                    *num_indices as u32,
+                    u32::from(*num_indices),
                     1,
-                    *first_index as u32,
+                    u32::from(*first_index),
                     0,
                     0,
                 );
@@ -1358,7 +1359,7 @@ fn has_names<T, F: Fn(&T) -> &[c_char]>(
         let name = to_name(item);
         for (i, c) in name.iter().enumerate() {
             if *c == 0 {
-                item_set.insert(&name[0..i + 1]);
+                item_set.insert(&name[0..=i]);
                 break;
             }
         }
@@ -1441,10 +1442,10 @@ fn select_gpu(
     Err(Error::NoGraphicsDevice)
 }
 
-/// Copied from unstable std while waiting for #![feature(int_roundigs)] to
+/// Copied from unstable std while waiting for #![`feature(int_roundigs)`] to
 /// stabilize.
 ///
-/// https://github.com/rust-lang/rust/issues/88581
+/// <https://github.com/rust-lang/rust/issues/88581>
 const fn next_multiple_of(lhs: vk::DeviceSize, rhs: vk::DeviceSize) -> vk::DeviceSize {
     match lhs % rhs {
         0 => lhs,
@@ -1480,8 +1481,8 @@ impl From<Rect> for vk::Rect2D {
     fn from(r: Rect) -> Self {
         Self {
             offset: vk::Offset2D {
-                x: r.left.0 as i32,
-                y: r.top.0 as i32,
+                x: i32::from(r.left.0),
+                y: i32::from(r.top.0),
             },
             extent: vk::Extent2D {
                 width: (r.right - r.left).0 as u32,

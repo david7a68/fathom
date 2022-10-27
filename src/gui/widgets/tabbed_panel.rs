@@ -16,6 +16,7 @@ use super::{
 const TAB_BAR_HEIGHT: Px = Px(10);
 const TAB_WIDTH: Px = Px(30);
 
+#[must_use]
 pub struct TabbedPanel<W: Widget> {
     state: WidgetState,
     children: Vec<Tab<W>>,
@@ -38,7 +39,7 @@ impl<W: Widget> TabbedPanel<W> {
         }
     }
 
-    fn tab_bar_rect(&self, bounds: Rect) -> Rect {
+    fn tab_bar_rect(bounds: Rect) -> Rect {
         Rect {
             left: bounds.left,
             right: bounds.right,
@@ -47,7 +48,7 @@ impl<W: Widget> TabbedPanel<W> {
         }
     }
 
-    fn content_rect(&self, bounds: Rect) -> Rect {
+    fn content_rect(bounds: Rect) -> Rect {
         Rect {
             left: bounds.left,
             right: bounds.right,
@@ -68,7 +69,7 @@ impl<W: Widget> Widget for TabbedPanel<W> {
 
     fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
         for child in &mut self.children {
-            f(&mut child.widget)
+            f(&mut child.widget);
         }
     }
 
@@ -78,7 +79,7 @@ impl<W: Widget> Widget for TabbedPanel<W> {
         match context.event() {
             Event::None => PostUpdate::NoChange,
             Event::CursorMove { position } => {
-                if self.content_rect(rect).contains(position) {
+                if Self::content_rect(rect).contains(position) {
                     context.update(&mut self.children[self.active].widget);
                 }
 
@@ -87,7 +88,7 @@ impl<W: Widget> Widget for TabbedPanel<W> {
             Event::MouseButton { button, state } => {
                 let cursor_pos = context.cursor_position();
 
-                if self.tab_bar_rect(rect).contains(cursor_pos) {
+                if Self::tab_bar_rect(rect).contains(cursor_pos) {
                     let cursor_x = cursor_pos.x;
                     let mut advancing_x = rect.left;
                     for (i, child) in self.children.iter_mut().enumerate() {
@@ -103,7 +104,7 @@ impl<W: Widget> Widget for TabbedPanel<W> {
                     }
 
                     PostUpdate::NoChange
-                } else if self.content_rect(rect).contains(cursor_pos) {
+                } else if Self::content_rect(rect).contains(cursor_pos) {
                     context.update(&mut self.children[self.active].widget);
                     PostUpdate::NoChange
                 } else {

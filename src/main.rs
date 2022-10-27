@@ -9,7 +9,7 @@ use fathom::{
     },
 };
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
     let tree = SplitPanel::<Box<dyn Widget>>::with_children(
         Axis::X,
         vec![
@@ -33,11 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
     );
 
-    Application::new()?.run(vec![AppWindowConfig {
+    Application::new().run(vec![AppWindowConfig {
         title: "Window #1",
         extent: None,
         widget_tree: Box::new(tree),
     }]);
-
-    Ok(())
 }

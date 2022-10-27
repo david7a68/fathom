@@ -84,6 +84,7 @@ enum Command {
 }
 
 /// A list of drawing commands to submit to the graphics device.
+#[must_use]
 #[derive(Default)]
 pub struct DrawCommandList {
     pub(self) current: Option<Command>,
@@ -141,6 +142,12 @@ impl DrawCommandList {
         self.push_command(Command::Scissor { rect });
     }
 
+    /// Draws a rectangle with the specified paint.
+    /// 
+    /// ## Panics
+    /// 
+    /// This function will panic if the number of vertices or indices exceeds
+    /// `Self::MAX_VERTICES` or `Self::MAX_INDICES` respectively.
     pub fn draw_rect(&mut self, rect: Rect, paint: Paint) {
         const NUM_VERTICES: u16 = 4;
         const NUM_INDICES: u16 = 6;

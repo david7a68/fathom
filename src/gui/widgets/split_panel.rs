@@ -12,6 +12,7 @@ pub enum Axis {
     Y,
 }
 
+#[must_use]
 pub struct SplitPanel<W: Widget + 'static> {
     state: WidgetState,
     children: Vec<W>,
@@ -39,7 +40,7 @@ impl<W: Widget + 'static> Widget for SplitPanel<W> {
 
     fn for_each_child_mut<'a>(&'a mut self, f: &mut dyn FnMut(&'a mut dyn Widget)) {
         for child in &mut self.children {
-            f(child)
+            f(child);
         }
     }
 
@@ -96,7 +97,7 @@ impl<W: Widget + 'static> Widget for SplitPanel<W> {
                         },
                         child_extent,
                     );
-                    advancing_x += child_extent.width
+                    advancing_x += child_extent.width;
                 }
 
                 constraints.max
@@ -127,7 +128,7 @@ impl<W: Widget + 'static> Widget for SplitPanel<W> {
                         },
                         child_extent,
                     );
-                    advancing_y += child_extent.height
+                    advancing_y += child_extent.height;
                 }
 
                 constraints.max
@@ -137,7 +138,7 @@ impl<W: Widget + 'static> Widget for SplitPanel<W> {
 
     fn accept_draw(&self, canvas: &mut DrawContext, _extent: Extent) {
         for child in &self.children {
-            canvas.draw(child)
+            canvas.draw(child);
         }
     }
 }

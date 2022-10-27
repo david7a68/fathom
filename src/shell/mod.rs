@@ -44,11 +44,11 @@ impl EventLoopControl {
     }
 
     pub fn wait(&mut self) {
-        *self = Self::Wait
+        *self = Self::Wait;
     }
 
     pub fn exit(&mut self) {
-        *self = Self::Exit
+        *self = Self::Exit;
     }
 }
 
@@ -58,6 +58,8 @@ impl EventLoopControl {
 ///
 /// This struct provides a uniform interface for those facilities needed by
 /// Fathom.
+#[must_use]
+#[allow(clippy::module_name_repetitions)]
 pub struct OsShell {
     inner: platform::OsShell,
 }
@@ -94,20 +96,32 @@ impl Shell for OsShell {
         self.inner.hide_window(window);
     }
 
+    #[cfg(target_os = "windows")]
     fn hwnd(&self, window: WindowId) -> windows::Win32::Foundation::HWND {
         self.inner.hwnd(window)
     }
 }
 
 pub trait Shell {
+    /// Creates a new window for the given configuration.
+    /// 
+    /// ## Errors
+    /// 
+    /// Window creation may fail if the shell is currently shutting down.
     fn create_window(&self, config: &WindowConfig) -> Result<WindowId, Error>;
 
+    /// Schedules the window for destruction. A `WindowEvent::Destroyed` event
+    /// will be sent to the event handler after the window is no longer visible
+    /// but before its associated resources are destroyed.
     fn destroy_window(&self, window: WindowId);
 
+    /// Makes the window visible.
     fn show_window(&self, window: WindowId);
 
+    /// Makes the window invisible.
     fn hide_window(&self, window: WindowId);
 
+    /// Retrieves the `HWND` for the window.
     #[cfg(target_os = "windows")]
     fn hwnd(&self, window: WindowId) -> windows::Win32::Foundation::HWND;
 }
