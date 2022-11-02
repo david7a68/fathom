@@ -20,6 +20,7 @@ impl Layout {
 #[derive(Clone, Copy, Debug)]
 #[repr(u8)]
 pub enum ColorSpace {
+    Linear,
     Srgb,
 }
 

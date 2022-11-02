@@ -104,9 +104,9 @@ impl Shell for OsShell {
 
 pub trait Shell {
     /// Creates a new window for the given configuration.
-    /// 
+    ///
     /// ## Errors
-    /// 
+    ///
     /// Window creation may fail if the shell is currently shutting down.
     fn create_window(&self, config: &WindowConfig) -> Result<WindowId, Error>;
 

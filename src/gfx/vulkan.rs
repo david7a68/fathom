@@ -9,7 +9,7 @@ use super::{
     color::Color,
     geometry::{Extent, Point, Rect},
     pixel_buffer::{ColorSpace, Layout, PixelBuffer},
-    DrawCommandList, Error, GfxDevice, Vertex, MAX_SWAPCHAINS,
+    DrawCommandList, Error, GfxDevice, SubImageUpdate, Vertex, MAX_IMAGES, MAX_SWAPCHAINS,
 };
 
 const fn as_cchar_slice(slice: &[u8]) -> &[c_char] {
@@ -83,6 +83,7 @@ pub struct Vulkan {
 
     windows: RefCell<HandlePool<WindowData, super::Swapchain, MAX_SWAPCHAINS>>,
     render_targets: RefCell<HandlePool<RenderTarget, super::RenderTarget, 128>>,
+    images: RefCell<HandlePool<Texture, super::Image, MAX_IMAGES>>,
 }
 
 impl Vulkan {
@@ -120,7 +121,7 @@ impl Vulkan {
             })?;
 
             let app_info = vk::ApplicationInfo {
-                api_version: vk::make_api_version(0, 1, 1, 0),
+                api_version: vk::make_api_version(0, 1, 2, 0),
                 ..Default::default()
             };
 
@@ -207,6 +208,7 @@ impl Vulkan {
             win32_surface_khr,
             windows: RefCell::new(HandlePool::preallocate()),
             render_targets: RefCell::new(HandlePool::preallocate()),
+            images: RefCell::new(HandlePool::preallocate_n(8)),
         })
     }
 }
@@ -237,7 +239,7 @@ impl GfxDevice for Vulkan {
         extent: Extent,
     ) -> Result<(), Error> {
         let mut windows = self.windows.borrow_mut();
-        let window = windows.get_mut(handle).ok_or(Error::InvalidHandle)?;
+        let window = windows.get_mut(handle)?;
         unsafe { self.device.device_wait_idle() }?;
         window.resize(self, extent.into())?;
         Ok(())
@@ -245,7 +247,7 @@ impl GfxDevice for Vulkan {
 
     fn destroy_swapchain(&self, handle: Handle<super::Swapchain>) -> Result<(), Error> {
         let mut windows = self.windows.borrow_mut();
-        let window = windows.remove(handle).ok_or(Error::InvalidHandle)?;
+        let window = windows.remove(handle)?;
         unsafe { self.device.device_wait_idle() }?;
         window.destroy(self);
         Ok(())
@@ -256,7 +258,7 @@ impl GfxDevice for Vulkan {
         handle: Handle<super::Swapchain>,
     ) -> Result<Handle<super::RenderTarget>, Error> {
         let mut windows = self.windows.borrow_mut();
-        let window = windows.get_mut(handle).ok_or(Error::InvalidHandle)?;
+        let window = windows.get_mut(handle)?;
         window.get_next_image(self)?;
 
         let mut render_targets = self.render_targets.borrow_mut();
@@ -267,7 +269,7 @@ impl GfxDevice for Vulkan {
     fn present_swapchain_images(&self, handles: &[Handle<super::Swapchain>]) -> Result<(), Error> {
         let mut windows = self.windows.borrow_mut();
         for handle in handles {
-            let window = windows.get_mut(*handle).ok_or(Error::InvalidHandle)?;
+            let window = windows.get_mut(*handle)?;
             window.present(self)?;
         }
         Ok(())
@@ -277,16 +279,37 @@ impl GfxDevice for Vulkan {
         &self,
         layout: Layout,
         color_space: ColorSpace,
+        extent: Extent,
     ) -> Result<Handle<super::Image>, Error> {
-        todo!()
+        Ok(self
+            .images
+            .borrow_mut()
+            .insert(Texture::new(self, layout, color_space, extent)?)?)
     }
 
     fn upload_image(&self, pixels: &PixelBuffer) -> Result<Handle<super::Image>, Error> {
         todo!()
     }
 
-    fn delete_image(&self, handle: Handle<super::Image>) -> Result<(), Error> {
+    fn update_image(
+        &self,
+        src: &PixelBuffer,
+        dst: Handle<super::Image>,
+        areas: &[SubImageUpdate],
+    ) -> Result<(), Error> {
         todo!()
+    }
+
+    fn delete_image(&self, handle: Handle<super::Image>) -> Result<(), Error> {
+        let mut images = self.images.borrow_mut();
+        // If is_idle() returns an error, remove the texture anyway.
+        let texture = images.remove_if(handle, |t| t.is_idle(self).unwrap_or(true))?;
+        if let Some(texture) = texture {
+            texture.destroy(self);
+            Ok(())
+        } else {
+            Err(Error::ResourceInUse)
+        }
     }
 
     fn get_image_pixels(&self, handle: Handle<super::Image>) -> Result<PixelBuffer, Error> {
@@ -295,7 +318,7 @@ impl GfxDevice for Vulkan {
 
     fn destroy_render_target(&self, handle: Handle<super::RenderTarget>) -> Result<(), Error> {
         let mut targets = self.render_targets.borrow_mut();
-        let render_target = targets.remove(handle).ok_or(Error::InvalidHandle)?;
+        let render_target = targets.remove(handle)?;
 
         match render_target {
             RenderTarget::Swapchain(..) => {
@@ -314,14 +337,14 @@ impl GfxDevice for Vulkan {
         commands: &DrawCommandList,
     ) -> Result<(), Error> {
         let mut targets = self.render_targets.borrow_mut();
-        let render_target = targets.get(handle).ok_or(Error::InvalidHandle)?;
+        let render_target = targets.get(handle)?;
 
         match render_target {
             RenderTarget::Swapchain(window_handle, frame_id) => {
                 let mut windows = self.windows.borrow_mut();
 
                 // Check if the window still exists.
-                if let Some(window) = windows.get_mut(*window_handle) {
+                if let Ok(window) = windows.get_mut(*window_handle) {
                     // Check if the render target is pointing to the current image
                     if *frame_id == window.frame_id {
                         // The only way to get a swapchain image is to get a
@@ -342,20 +365,54 @@ impl GfxDevice for Vulkan {
                             )?;
                         }
 
-                        write_command_buffer(
+                        frame
+                            .geometry
+                            .copy(self, &commands.vertices, &commands.indices)?;
+                        let used_textures = write_command_buffer(
                             self,
                             &window.shader,
                             commands,
                             frame.framebuffer,
                             window.swapchain.extent,
-                            &mut frame.geometry,
+                            &frame.geometry,
                             frame.command_buffer,
                         )?;
+
+                        let mut wait_values = SmallVec::<[_; MAX_IMAGES as usize]>::new();
+                        let mut wait_semaphores = SmallVec::<[_; MAX_IMAGES as usize]>::new();
+                        let mut signal_values = SmallVec::<[_; MAX_IMAGES as usize]>::new();
+                        let mut signal_semaphores = SmallVec::<[_; MAX_IMAGES as usize]>::new();
+
+                        for texture in used_textures {
+                            let mut images = self.images.borrow_mut();
+                            let texture = images.get_mut(texture).unwrap();
+
+                            // Make sure that the texture is not being written
+                            // to when we start using it (semaphore == count).
+                            wait_semaphores.push(texture.write_semaphore);
+                            wait_values.push(texture.write_count);
+
+                            // Increment the read semaphore when drawing is
+                            // complete, and increment the check to match. Reads
+                            // will be complete when semaphore == count.
+                            signal_semaphores.push(texture.read_semaphore);
+                            texture.read_count += 1;
+                            signal_values.push(texture.read_count);
+                        }
+
+                        let mut timeline_info = vk::TimelineSemaphoreSubmitInfo {
+                            wait_semaphore_value_count: wait_semaphores.len() as u32,
+                            p_wait_semaphore_values: wait_values.as_ptr(),
+                            signal_semaphore_value_count: signal_semaphores.len() as u32,
+                            p_signal_semaphore_values: signal_values.as_ptr(),
+                            ..Default::default()
+                        };
 
                         unsafe {
                             self.device.queue_submit(
                                 self.graphics_queue,
                                 &[vk::SubmitInfo::builder()
+                                    .push_next(&mut timeline_info)
                                     .command_buffers(&[frame.command_buffer])
                                     .wait_semaphores(&[sync.acquire_semaphore])
                                     .signal_semaphores(&[sync.present_semaphore])
@@ -429,7 +486,7 @@ fn regenerate_frames(
     swapchain: &Swapchain,
     shader: &Shader,
     frames: &mut Vec<Frame>,
-) -> Result<(), Error> {
+) -> Result<(), vk::Result> {
     let images = unsafe { api.swapchain_khr.get_swapchain_images(swapchain.handle) }?;
 
     // if there are more frames than images
@@ -571,7 +628,7 @@ struct FrameSync {
 }
 
 impl FrameSync {
-    fn new(device: &ash::Device) -> Result<Self, Error> {
+    fn new(device: &ash::Device) -> Result<Self, vk::Result> {
         let create_info = vk::SemaphoreCreateInfo::builder();
         Ok(Self {
             acquire_semaphore: unsafe { device.create_semaphore(&create_info, None) }?,
@@ -598,11 +655,15 @@ struct Swapchain {
 }
 
 impl Swapchain {
-    fn new(api: &Vulkan, surface: vk::SurfaceKHR, extent: vk::Extent2D) -> Result<Self, Error> {
+    fn new(
+        api: &Vulkan,
+        surface: vk::SurfaceKHR,
+        extent: vk::Extent2D,
+    ) -> Result<Self, vk::Result> {
         Self::create_swapchain(api, surface, extent, vk::SwapchainKHR::null())
     }
 
-    fn resize(&mut self, api: &Vulkan, extent: vk::Extent2D) -> Result<(), Error> {
+    fn resize(&mut self, api: &Vulkan, extent: vk::Extent2D) -> Result<(), vk::Result> {
         unsafe { api.device.device_wait_idle() }?;
         let new = Self::create_swapchain(api, self.surface, extent, self.handle)?;
         unsafe { api.swapchain_khr.destroy_swapchain(self.handle, None) };
@@ -621,7 +682,7 @@ impl Swapchain {
         surface: vk::SurfaceKHR,
         #[allow(unused)] extent: vk::Extent2D,
         old_swapchain: vk::SwapchainKHR,
-    ) -> Result<Swapchain, Error> {
+    ) -> Result<Swapchain, vk::Result> {
         let vk::SurfaceFormatKHR {
             format,
             color_space,
@@ -743,7 +804,7 @@ struct WindowData {
 
 impl WindowData {
     #[cfg(target_os = "windows")]
-    fn new(api: &Vulkan, hwnd: windows::Win32::Foundation::HWND) -> Result<Self, Error> {
+    fn new(api: &Vulkan, hwnd: windows::Win32::Foundation::HWND) -> Result<Self, vk::Result> {
         use windows::Win32::{
             Foundation::RECT, System::LibraryLoader::GetModuleHandleW,
             UI::WindowsAndMessaging::GetClientRect,
@@ -774,7 +835,11 @@ impl WindowData {
 
     /// Platform-independent code for initializing a window. See `new` for the
     /// platform-dependent coe needed to call this method.
-    fn _new(api: &Vulkan, surface: vk::SurfaceKHR, extent: vk::Extent2D) -> Result<Self, Error> {
+    fn _new(
+        api: &Vulkan,
+        surface: vk::SurfaceKHR,
+        extent: vk::Extent2D,
+    ) -> Result<Self, vk::Result> {
         let swapchain = Swapchain::new(api, surface, extent)?;
         let shader = create_shader(api, swapchain.format)?;
 
@@ -792,7 +857,7 @@ impl WindowData {
     }
 
     /// Resize the swapchain and create the necessary per-frame data.
-    fn resize(&mut self, api: &Vulkan, extent: vk::Extent2D) -> Result<(), Error> {
+    fn resize(&mut self, api: &Vulkan, extent: vk::Extent2D) -> Result<(), vk::Result> {
         unsafe { api.device.device_wait_idle() }?;
         self.swapchain.resize(api, extent)?;
         regenerate_frames(api, &self.swapchain, &self.shader, &mut self.frames)
@@ -818,7 +883,7 @@ impl WindowData {
         }
     }
 
-    fn present(&mut self, api: &Vulkan) -> Result<(), Error> {
+    fn present(&mut self, api: &Vulkan) -> Result<(), vk::Result> {
         let sync = &self.frame_sync[self.frame_id as usize % self.frame_sync.len()];
 
         if let Some(index) = self.current_image.take() {
@@ -1067,7 +1132,7 @@ impl GeometryBuffer {
 
     /// Allocates a new buffer suitable for 1024 rects (4096 vertices and 6144
     /// indices).
-    fn new(api: &Vulkan) -> Result<Self, Error> {
+    fn new(api: &Vulkan) -> Result<Self, vk::Result> {
         let index_offset = Self::index_offset(api, Self::NUM_INIT_VERTICES);
         let buffer_size = index_offset + Self::index_size(Self::NUM_INIT_INDICES);
 
@@ -1094,7 +1159,12 @@ impl GeometryBuffer {
     ///
     /// This copy _does not_ shrink the buffer, however, as there is no real
     /// usecase for it yet.
-    fn copy(&mut self, api: &Vulkan, vertices: &[Vertex], indices: &[u16]) -> Result<(), Error> {
+    fn copy(
+        &mut self,
+        api: &Vulkan,
+        vertices: &[Vertex],
+        indices: &[u16],
+    ) -> Result<(), vk::Result> {
         let index_offset = Self::index_offset(api, vertices.len() as vk::DeviceSize);
         let required_size = index_offset + Self::index_size(indices.len() as vk::DeviceSize);
 
@@ -1132,7 +1202,10 @@ impl GeometryBuffer {
     }
 
     /// Allocates `size` bytes fand binds it to a buffer.
-    fn alloc(api: &Vulkan, size: vk::DeviceSize) -> Result<(vk::Buffer, vk::DeviceMemory), Error> {
+    fn alloc(
+        api: &Vulkan,
+        size: vk::DeviceSize,
+    ) -> Result<(vk::Buffer, vk::DeviceMemory), vk::Result> {
         let buffer = {
             let create_info = vk::BufferCreateInfo::builder()
                 .size(size)
@@ -1146,7 +1219,7 @@ impl GeometryBuffer {
             let properties =
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::DEVICE_LOCAL;
 
-            let type_index = Self::find_memory_type(
+            let type_index = find_memory_type(
                 &api.physical_device.memory_properties,
                 requirements.memory_type_bits,
                 properties,
@@ -1178,35 +1251,185 @@ impl GeometryBuffer {
     fn index_size(n_indices: vk::DeviceSize) -> vk::DeviceSize {
         std::mem::size_of::<u16>() as vk::DeviceSize * n_indices
     }
+}
 
-    fn find_memory_type(
-        properties: &vk::PhysicalDeviceMemoryProperties,
-        type_bits: u32,
-        required_properties: vk::MemoryPropertyFlags,
-    ) -> Option<u32> {
-        (0..properties.memory_type_count).find(|&i| {
-            (type_bits & (1 << i)) != 0
-                && properties.memory_types[i as usize]
-                    .property_flags
-                    .contains(required_properties)
+struct Texture {
+    image: vk::Image,
+    image_view: vk::ImageView,
+    memory: vk::DeviceMemory,
+    /// A timeline semaphore used to track write operations. If
+    /// `write_semaphore==write_count`, the texture is not currently being
+    /// written to and can be used for reading.
+    write_semaphore: vk::Semaphore,
+    /// A count of the number of write operations executed on this texture.
+    write_count: u64,
+    /// A timeline semaphore used to track read operations. If
+    /// `read_semaphore==read_count`, the texture is not currently being read
+    /// and can be used for write operations.
+    read_semaphore: vk::Semaphore,
+    /// A count of the number of read operations executed on this texture.
+    read_count: u64,
+}
+
+impl Texture {
+    fn new(
+        api: &Vulkan,
+        layout: Layout,
+        color_space: ColorSpace,
+        extent: Extent,
+    ) -> Result<Self, vk::Result> {
+        let format = to_vk_format(layout, color_space);
+
+        let image = {
+            let create_info = vk::ImageCreateInfo {
+                flags: vk::ImageCreateFlags::empty(),
+                image_type: vk::ImageType::TYPE_2D,
+                format,
+                extent: vk::Extent3D {
+                    width: extent.width.0 as u32,
+                    height: extent.height.0 as u32,
+                    depth: 1,
+                },
+                mip_levels: 1,
+                array_layers: 1,
+                samples: vk::SampleCountFlags::TYPE_1,
+                tiling: vk::ImageTiling::OPTIMAL,
+                usage: vk::ImageUsageFlags::SAMPLED,
+                initial_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                ..Default::default()
+            };
+
+            unsafe { api.device.create_image(&create_info, None) }?
+        };
+
+        let image_view = {
+            let create_info = vk::ImageViewCreateInfo {
+                flags: vk::ImageViewCreateFlags::empty(),
+                image,
+                view_type: vk::ImageViewType::TYPE_2D,
+                format,
+                components: vk::ComponentMapping::default(),
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                ..Default::default()
+            };
+
+            unsafe { api.device.create_image_view(&create_info, None) }?
+        };
+
+        let memory = {
+            let requirements = unsafe { api.device.get_image_memory_requirements(image) };
+            let properties = vk::MemoryPropertyFlags::DEVICE_LOCAL;
+
+            let type_index = find_memory_type(
+                &api.physical_device.memory_properties,
+                requirements.memory_type_bits,
+                properties,
+            )
+            .ok_or(vk::Result::ERROR_UNKNOWN)?;
+
+            let create_info = vk::MemoryAllocateInfo::builder()
+                .allocation_size(requirements.size)
+                .memory_type_index(type_index);
+
+            unsafe { api.device.allocate_memory(&create_info, None) }?
+        };
+
+        unsafe { api.device.bind_image_memory(image, memory, 0) }?;
+
+        let write_semaphore = {
+            let timeline_info = vk::SemaphoreTypeCreateInfo {
+                semaphore_type: vk::SemaphoreType::TIMELINE,
+                initial_value: 0,
+                ..Default::default()
+            };
+
+            let create_info = vk::SemaphoreCreateInfo {
+                p_next: &timeline_info as *const vk::SemaphoreTypeCreateInfo as *const _,
+                ..Default::default()
+            };
+
+            unsafe { api.device.create_semaphore(&create_info, None) }?
+        };
+
+        let read_semaphore = {
+            let timeline_info = vk::SemaphoreTypeCreateInfo {
+                semaphore_type: vk::SemaphoreType::TIMELINE,
+                initial_value: 0,
+                ..Default::default()
+            };
+
+            let create_info = vk::SemaphoreCreateInfo {
+                p_next: &timeline_info as *const vk::SemaphoreTypeCreateInfo as *const _,
+                ..Default::default()
+            };
+
+            unsafe { api.device.create_semaphore(&create_info, None) }?
+        };
+
+        Ok(Self {
+            image,
+            image_view,
+            memory,
+            write_semaphore,
+            write_count: 0,
+            read_semaphore,
+            read_count: 0,
         })
+    }
+
+    fn is_idle(&self, api: &Vulkan) -> Result<bool, vk::Result> {
+        let write_count = unsafe { api.device.get_semaphore_counter_value(self.write_semaphore) }?;
+        let read_count = unsafe { api.device.get_semaphore_counter_value(self.read_semaphore) }?;
+        Ok(write_count == self.write_count && read_count == self.read_count)
+    }
+
+    fn destroy(self, api: &Vulkan) {
+        assert!(
+            self.is_idle(api).unwrap(),
+            "must not destory an image that is in use"
+        );
+        unsafe {
+            api.device.destroy_image_view(self.image_view, None);
+            api.device.destroy_image(self.image, None);
+            api.device.free_memory(self.memory, None);
+
+            api.device.destroy_semaphore(self.write_semaphore, None);
+            api.device.destroy_semaphore(self.read_semaphore, None);
+        }
     }
 }
 
+fn find_memory_type(
+    properties: &vk::PhysicalDeviceMemoryProperties,
+    type_bits: u32,
+    required_properties: vk::MemoryPropertyFlags,
+) -> Option<u32> {
+    (0..properties.memory_type_count).find(|&i| {
+        (type_bits & (1 << i)) != 0
+            && properties.memory_types[i as usize]
+                .property_flags
+                .contains(required_properties)
+    })
+}
+
 /// Writes everything that is needed to draw the commands to the command buffer,
-/// including `vkBeginCommandbuffer` and `vkEndCommandBuffer`. You just need to
-/// submit it to the graphics queue.
+/// including `vkBeginCommandbuffer` and `vkEndCommandBuffer`. It returns a list
+/// of all the unique images that were in the command stream.
 fn write_command_buffer(
     api: &Vulkan,
     polygon_shader: &Shader,
     commands: &DrawCommandList,
     target: vk::Framebuffer,
     viewport: vk::Extent2D,
-    geometry: &mut GeometryBuffer,
+    geometry: &GeometryBuffer,
     command_buffer: vk::CommandBuffer,
-) -> Result<(), Error> {
-    geometry.copy(api, &commands.vertices, &commands.indices)?;
-
+) -> Result<SmallVec<[Handle<super::Image>; MAX_IMAGES as usize]>, vk::Result> {
     unsafe {
         api.device.begin_command_buffer(
             command_buffer,
@@ -1269,6 +1492,7 @@ fn write_command_buffer(
         );
     }
 
+    let mut textures = SmallVec::<[Handle<super::Image>; MAX_IMAGES as usize]>::new();
     for command in commands.commands.iter().chain(commands.current.as_ref()) {
         match command {
             super::Command::Scissor { rect } => unsafe {
@@ -1310,7 +1534,10 @@ fn write_command_buffer(
                 first_uv,
                 num_vertices,
                 num_indices,
-            } => todo!(),
+            } => {
+                textures.push(*texture);
+                todo!()
+            }
         }
     }
 
@@ -1319,7 +1546,9 @@ fn write_command_buffer(
         api.device.end_command_buffer(command_buffer)?;
     }
 
-    Ok(())
+    textures.sort_unstable();
+    textures.dedup();
+    Ok(textures)
 }
 
 impl Vertex {
@@ -1331,12 +1560,14 @@ impl Vertex {
         };
 
     pub const ATTRIBUTE_DESCRIPTIONS: [vk::VertexInputAttributeDescription; 2] = [
+        // ivec2 position
         vk::VertexInputAttributeDescription {
             location: 0,
             binding: 0,
             format: vk::Format::R16G16_SINT,
             offset: 0,
         },
+        // vec4 color
         vk::VertexInputAttributeDescription {
             location: 1,
             binding: 0,
@@ -1446,6 +1677,16 @@ fn select_gpu(
     Err(Error::NoGraphicsDevice)
 }
 
+fn to_vk_format(layout: Layout, color_space: ColorSpace) -> vk::Format {
+    match layout {
+        // We only use RGBA textures for convenience
+        Layout::RGB8 | Layout::RGBA8 => match color_space {
+            ColorSpace::Linear => vk::Format::R8G8B8A8_UINT,
+            ColorSpace::Srgb => vk::Format::R8G8B8A8_SRGB,
+        },
+    }
+}
+
 /// Copied from unstable std while waiting for #![`feature(int_roundigs)`] to
 /// stabilize.
 ///
@@ -1460,6 +1701,7 @@ const fn next_multiple_of(lhs: vk::DeviceSize, rhs: vk::DeviceSize) -> vk::Devic
 impl From<crate::handle_pool::Error> for Error {
     fn from(e: crate::handle_pool::Error) -> Self {
         match e {
+            crate::handle_pool::Error::InvalidHandle => Self::InvalidHandle,
             crate::handle_pool::Error::TooManyObjects {
                 num_allocated: _,
                 num_retired: _,

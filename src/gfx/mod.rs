@@ -12,6 +12,7 @@ pub mod pixel_buffer;
 mod vulkan;
 
 pub const MAX_SWAPCHAINS: u32 = 32;
+pub const MAX_IMAGES: u32 = 64;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -58,6 +59,11 @@ pub(self) struct Vertex {
 #[derive(Clone, Copy, Debug)]
 pub enum Paint {
     Fill { color: Color },
+}
+
+pub struct SubImageUpdate {
+    pub source_area: Rect,
+    pub sub_image_origin: Point,
 }
 
 pub enum Draw {
@@ -143,9 +149,9 @@ impl DrawCommandList {
     }
 
     /// Draws a rectangle with the specified paint.
-    /// 
+    ///
     /// ## Panics
-    /// 
+    ///
     /// This function will panic if the number of vertices or indices exceeds
     /// `Self::MAX_VERTICES` or `Self::MAX_INDICES` respectively.
     pub fn draw_rect(&mut self, rect: Rect, paint: Paint) {
@@ -241,19 +247,39 @@ pub trait GfxDevice {
     fn present_swapchain_images(&self, handles: &[Handle<Swapchain>]) -> Result<(), Error>;
 
     /// Creates an image that can be used in rendering operations.
-    fn create_image(&self, layout: Layout, color_space: ColorSpace)
-        -> Result<Handle<Image>, Error>;
+    fn create_image(
+        &self,
+        layout: Layout,
+        color_space: ColorSpace,
+        extent: Extent,
+    ) -> Result<Handle<Image>, Error>;
 
     /// Uploads an image from a pixel buffer so that it can be used for
     /// rendering operations.
+    ///
+    /// This is equivalent to the following:
+    ///
+    /// ```ignore
+    /// let image = gfx.create_image(pixels.layout(), pixels.color_space())?;
+    /// gfx.update_image(pixels, Rect::new(Offset::zero(), pixels.extent()), image, Offset::zero())?;
+    /// ```
     fn upload_image(&self, pixels: &PixelBuffer) -> Result<Handle<Image>, Error>;
+
+    /// Copies the desired areas from `src` into `dst`, performing format and
+    /// color-space transformations as necessary.
+    fn update_image(
+        &self,
+        src: &PixelBuffer,
+        dst: Handle<Image>,
+        areas: &[SubImageUpdate],
+    ) -> Result<(), Error>;
 
     /// Deletes the image, freeing any resources that were associated with it.
     ///
-    /// ## Note
+    /// ## Errors
     ///
-    /// Any pending operations depending on the image will be permitted to
-    /// complete before the resources backing the image are released.
+    /// This method fails if the image is currently being used for an operation
+    /// (such as an update, or as part of a draw) and will return [`Error::ResourceInUse`].
     fn delete_image(&self, handle: Handle<Image>) -> Result<(), Error>;
 
     /// Copies the pixels from the handle into a [`PixelBuffer`].
