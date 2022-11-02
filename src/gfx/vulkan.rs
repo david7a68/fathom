@@ -176,7 +176,21 @@ impl Vulkan {
                 );
             }
 
+            // Enable timeline semaphores
+            let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
+            let mut features = vk::PhysicalDeviceFeatures2::builder().push_next(&mut features12);
+            unsafe { instance.get_physical_device_features2(gpu.handle, &mut features) };
+
+            let mut features = if features12.timeline_semaphore == vk::TRUE {
+                features12 = vk::PhysicalDeviceVulkan12Features::default();
+                features12.timeline_semaphore = vk::TRUE;
+                vk::PhysicalDeviceFeatures2::builder().push_next(&mut features12).build()
+            } else {
+                return Err(Error::NoGraphicsDevice);
+            };
+
             let create_info = vk::DeviceCreateInfo::builder()
+                .push_next(&mut features)
                 .queue_create_infos(&queues)
                 .enabled_extension_names(&device_extensions);
 
@@ -300,7 +314,7 @@ impl GfxDevice for Vulkan {
         todo!()
     }
 
-    fn delete_image(&self, handle: Handle<super::Image>) -> Result<(), Error> {
+    fn destroy_image(&self, handle: Handle<super::Image>) -> Result<(), Error> {
         let mut images = self.images.borrow_mut();
         // If is_idle() returns an error, remove the texture anyway.
         let texture = images.remove_if(handle, |t| t.is_idle(self).unwrap_or(true))?;
@@ -1295,31 +1309,11 @@ impl Texture {
                 samples: vk::SampleCountFlags::TYPE_1,
                 tiling: vk::ImageTiling::OPTIMAL,
                 usage: vk::ImageUsageFlags::SAMPLED,
-                initial_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                initial_layout: vk::ImageLayout::UNDEFINED,
                 ..Default::default()
             };
 
             unsafe { api.device.create_image(&create_info, None) }?
-        };
-
-        let image_view = {
-            let create_info = vk::ImageViewCreateInfo {
-                flags: vk::ImageViewCreateFlags::empty(),
-                image,
-                view_type: vk::ImageViewType::TYPE_2D,
-                format,
-                components: vk::ComponentMapping::default(),
-                subresource_range: vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                },
-                ..Default::default()
-            };
-
-            unsafe { api.device.create_image_view(&create_info, None) }?
         };
 
         let memory = {
@@ -1341,6 +1335,26 @@ impl Texture {
         };
 
         unsafe { api.device.bind_image_memory(image, memory, 0) }?;
+
+        let image_view = {
+            let create_info = vk::ImageViewCreateInfo {
+                flags: vk::ImageViewCreateFlags::empty(),
+                image,
+                view_type: vk::ImageViewType::TYPE_2D,
+                format,
+                components: vk::ComponentMapping::default(),
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                ..Default::default()
+            };
+
+            unsafe { api.device.create_image_view(&create_info, None) }?
+        };
 
         let write_semaphore = {
             let timeline_info = vk::SemaphoreTypeCreateInfo {

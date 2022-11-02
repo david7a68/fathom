@@ -280,7 +280,7 @@ pub trait GfxDevice {
     ///
     /// This method fails if the image is currently being used for an operation
     /// (such as an update, or as part of a draw) and will return [`Error::ResourceInUse`].
-    fn delete_image(&self, handle: Handle<Image>) -> Result<(), Error>;
+    fn destroy_image(&self, handle: Handle<Image>) -> Result<(), Error>;
 
     /// Copies the pixels from the handle into a [`PixelBuffer`].
     ///
