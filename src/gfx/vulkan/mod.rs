@@ -1,24 +1,26 @@
+mod ui_shader;
+
 use std::{cell::RefCell, ffi::c_char};
 
 use ash::vk;
 use smallvec::SmallVec;
 
-use crate::handle_pool::{Handle, HandlePool};
+use crate::{
+    gfx::vulkan::ui_shader::UiGeometryBuffer,
+    handle_pool::{Handle, HandlePool},
+};
+
+use self::ui_shader::UiShader;
 
 use super::{
-    color::Color,
-    geometry::{Extent, Point, Rect},
+    geometry::{Extent, Rect},
     pixel_buffer::{ColorSpace, Layout, PixelBuffer},
-    DrawCommandList, Error, GfxDevice, SubImageUpdate, Vertex, MAX_IMAGES, MAX_SWAPCHAINS,
+    DrawCommandList, Error, GfxDevice, SubImageUpdate, MAX_IMAGES, MAX_SWAPCHAINS,
 };
 
 const fn as_cchar_slice(slice: &[u8]) -> &[c_char] {
     unsafe { std::mem::transmute(slice) }
 }
-
-const SHADER_MAIN: *const i8 = b"main\0".as_ptr().cast();
-const UI_FRAG_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.frag.spv"));
-const UI_VERT_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.vert.spv"));
 
 const VALIDATION_LAYER: &[c_char] = as_cchar_slice(b"VK_LAYER_KHRONOS_validation\0");
 
@@ -39,18 +41,6 @@ const OPTIONAL_DEVICE_EXTENSIONS: &[&[c_char]] = &[];
 
 const FRAMES_IN_FLIGHT: usize = 2;
 const PREFERRED_SWAPCHAIN_LENGTH: u32 = 2;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct PushConstants {
-    scale: [f32; 2],
-    translate: [f32; 2],
-}
-
-union PushConstantBytes {
-    constants: PushConstants,
-    bytes: [u8; std::mem::size_of::<PushConstants>()],
-}
 
 #[derive(Debug)]
 struct PhysicalDevice {
@@ -184,7 +174,9 @@ impl Vulkan {
             let mut features = if features12.timeline_semaphore == vk::TRUE {
                 features12 = vk::PhysicalDeviceVulkan12Features::default();
                 features12.timeline_semaphore = vk::TRUE;
-                vk::PhysicalDeviceFeatures2::builder().push_next(&mut features12).build()
+                vk::PhysicalDeviceFeatures2::builder()
+                    .push_next(&mut features12)
+                    .build()
             } else {
                 return Err(Error::NoGraphicsDevice);
             };
@@ -382,9 +374,8 @@ impl GfxDevice for Vulkan {
                         frame
                             .geometry
                             .copy(self, &commands.vertices, &commands.indices)?;
-                        let used_textures = write_command_buffer(
+                        let used_textures = window.shader.apply(
                             self,
-                            &window.shader,
                             commands,
                             frame.framebuffer,
                             window.swapchain.extent,
@@ -470,7 +461,7 @@ struct Frame {
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
 
-    geometry: GeometryBuffer,
+    geometry: UiGeometryBuffer,
 
     /// The fence is used to determine when the GPU is done rendering this
     /// frame. Once rendering is done, the command pool can be reset, and the
@@ -498,7 +489,7 @@ impl Frame {
 fn regenerate_frames(
     api: &Vulkan,
     swapchain: &Swapchain,
-    shader: &Shader,
+    shader: &UiShader,
     frames: &mut Vec<Frame>,
 ) -> Result<(), vk::Result> {
     let images = unsafe { api.swapchain_khr.get_swapchain_images(swapchain.handle) }?;
@@ -538,19 +529,7 @@ fn regenerate_frames(
             unsafe { api.device.create_image_view(&create_info, None) }?
         };
 
-        frame.framebuffer = {
-            let create_info = vk::FramebufferCreateInfo {
-                render_pass: shader.render_pass,
-                attachment_count: 1,
-                p_attachments: &frame.image_view,
-                width: swapchain.extent.width,
-                height: swapchain.extent.height,
-                layers: 1,
-                ..Default::default()
-            };
-
-            unsafe { api.device.create_framebuffer(&create_info, None) }?
-        };
+        frame.framebuffer = shader.create_framebuffer(api, frame.image_view, swapchain.extent)?;
     }
 
     // if there are more images than frames
@@ -576,19 +555,7 @@ fn regenerate_frames(
             unsafe { api.device.create_image_view(&create_info, None) }?
         };
 
-        let framebuffer = {
-            let create_info = vk::FramebufferCreateInfo {
-                render_pass: shader.render_pass,
-                attachment_count: 1,
-                p_attachments: &image_view,
-                width: swapchain.extent.width,
-                height: swapchain.extent.height,
-                layers: 1,
-                ..Default::default()
-            };
-
-            unsafe { api.device.create_framebuffer(&create_info, None) }?
-        };
+        let framebuffer = shader.create_framebuffer(api, image_view, swapchain.extent)?;
 
         let command_pool = {
             let create_info = vk::CommandPoolCreateInfo::builder()
@@ -613,7 +580,7 @@ fn regenerate_frames(
             command_buffer
         };
 
-        let geometry = GeometryBuffer::new(api)?;
+        let geometry = UiGeometryBuffer::new(api)?;
 
         let fence = {
             let create_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
@@ -793,7 +760,7 @@ struct WindowData {
 
     /// Dependent on swapchain format. Though this could technically change on
     /// resize, I know of no circumstance in which this actually happens.
-    shader: Shader,
+    shader: UiShader,
 
     /// A monotonically increasing id used to keep track of which `FrameSync`
     /// object to use each frame.
@@ -855,7 +822,7 @@ impl WindowData {
         extent: vk::Extent2D,
     ) -> Result<Self, vk::Result> {
         let swapchain = Swapchain::new(api, surface, extent)?;
-        let shader = create_shader(api, swapchain.format)?;
+        let shader = UiShader::new(api, swapchain.format)?;
 
         let mut frames = Vec::new();
         regenerate_frames(api, &swapchain, &shader, &mut frames)?;
@@ -929,341 +896,6 @@ impl WindowData {
         for sync in self.frame_sync {
             sync.destroy(&api.device);
         }
-    }
-}
-
-/// Utility struct for holding a pipeline and render pass.
-struct Shader {
-    pipeline: vk::Pipeline,
-    layout: vk::PipelineLayout,
-    render_pass: vk::RenderPass,
-}
-
-impl Shader {
-    fn destroy(self, device: &ash::Device) {
-        unsafe {
-            device.destroy_pipeline(self.pipeline, None);
-            device.destroy_render_pass(self.render_pass, None);
-            device.destroy_pipeline_layout(self.layout, None);
-        }
-    }
-}
-
-#[allow(clippy::too_many_lines)]
-fn create_shader(api: &Vulkan, format: vk::Format) -> Result<Shader, vk::Result> {
-    let layout = {
-        let push_constant_range = [vk::PushConstantRange::builder()
-            .offset(0)
-            .size(
-                std::mem::size_of::<PushConstants>()
-                    .try_into()
-                    .expect("push constants exceed 2^32 bytes; what happened?"),
-            )
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
-            .build()];
-
-        let pipeline_layout_ci =
-            vk::PipelineLayoutCreateInfo::builder().push_constant_ranges(&push_constant_range);
-
-        unsafe {
-            api.device
-                .create_pipeline_layout(&pipeline_layout_ci, None)?
-        }
-    };
-
-    let render_pass = {
-        let attachment_descriptions = [vk::AttachmentDescription {
-            flags: vk::AttachmentDescriptionFlags::empty(),
-            format,
-            samples: vk::SampleCountFlags::TYPE_1,
-            load_op: vk::AttachmentLoadOp::CLEAR,
-            store_op: vk::AttachmentStoreOp::STORE,
-            stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
-            stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
-            initial_layout: vk::ImageLayout::UNDEFINED,
-            final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-        }];
-
-        let subpass_descriptions = [vk::SubpassDescription::builder()
-            .color_attachments(&[vk::AttachmentReference {
-                attachment: 0,
-                layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            }])
-            .build()];
-
-        let subpass_dependencies = [vk::SubpassDependency {
-            src_subpass: vk::SUBPASS_EXTERNAL,
-            dst_subpass: 0,
-            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: vk::AccessFlags::NONE,
-            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            dependency_flags: vk::DependencyFlags::empty(),
-        }];
-
-        let render_pass_ci = vk::RenderPassCreateInfo::builder()
-            .attachments(&attachment_descriptions)
-            .subpasses(&subpass_descriptions)
-            .dependencies(&subpass_dependencies);
-
-        unsafe { api.device.create_render_pass(&render_pass_ci, None) }?
-    };
-
-    let pipeline = {
-        let vertex_shader = unsafe {
-            api.device.create_shader_module(
-                &vk::ShaderModuleCreateInfo::builder().code(std::slice::from_raw_parts(
-                    UI_VERT_SHADER_SPV.as_ptr().cast(),
-                    UI_VERT_SHADER_SPV.len() / 4,
-                )),
-                None,
-            )?
-        };
-
-        let fragment_shader = unsafe {
-            api.device.create_shader_module(
-                &vk::ShaderModuleCreateInfo::builder().code(std::slice::from_raw_parts(
-                    UI_FRAG_SHADER_SPV.as_ptr().cast(),
-                    UI_FRAG_SHADER_SPV.len() / 4,
-                )),
-                None,
-            )?
-        };
-
-        let shader_main = unsafe { std::ffi::CStr::from_ptr(SHADER_MAIN) };
-        let shader_stage_ci = [
-            vk::PipelineShaderStageCreateInfo::builder()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(vertex_shader)
-                .name(shader_main)
-                .build(),
-            vk::PipelineShaderStageCreateInfo::builder()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(fragment_shader)
-                .name(shader_main)
-                .build(),
-        ];
-
-        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-
-        let dynamic_state_ci =
-            vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_states);
-
-        let binding_descriptions = &[Vertex::BINDING_DESCRIPTION];
-        let attribute_descriptions = &Vertex::ATTRIBUTE_DESCRIPTIONS;
-        let vertex_input_ci = vk::PipelineVertexInputStateCreateInfo::builder()
-            .vertex_attribute_descriptions(attribute_descriptions)
-            .vertex_binding_descriptions(binding_descriptions);
-
-        let input_assembly_ci = vk::PipelineInputAssemblyStateCreateInfo::builder()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-
-        let viewport_state_ci = vk::PipelineViewportStateCreateInfo::builder()
-            .viewport_count(1)
-            .scissor_count(1);
-
-        let rasterization_ci = vk::PipelineRasterizationStateCreateInfo::builder()
-            .depth_clamp_enable(false)
-            .rasterizer_discard_enable(false)
-            .polygon_mode(vk::PolygonMode::FILL)
-            .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::BACK)
-            .front_face(vk::FrontFace::CLOCKWISE)
-            .depth_bias_enable(false);
-
-        let multisample_ci = vk::PipelineMultisampleStateCreateInfo::builder()
-            .sample_shading_enable(false)
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-
-        let framebuffer_blend_ci = vk::PipelineColorBlendAttachmentState::builder()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(false)
-            .build();
-
-        let global_blend_ci = vk::PipelineColorBlendStateCreateInfo::builder()
-            .logic_op_enable(false)
-            .attachments(std::slice::from_ref(&framebuffer_blend_ci));
-
-        let pipeline_ci = vk::GraphicsPipelineCreateInfo::builder()
-            .stages(&shader_stage_ci)
-            .vertex_input_state(&vertex_input_ci)
-            .input_assembly_state(&input_assembly_ci)
-            .viewport_state(&viewport_state_ci)
-            .rasterization_state(&rasterization_ci)
-            .multisample_state(&multisample_ci)
-            .color_blend_state(&global_blend_ci)
-            .dynamic_state(&dynamic_state_ci)
-            .layout(layout)
-            .render_pass(render_pass)
-            .subpass(0)
-            .build();
-
-        let pipeline = {
-            let mut pipeline = vk::Pipeline::null();
-            unsafe {
-                // Call the function pointer directly to avoid allocating a
-                // 1-element Vec
-                (api.device.fp_v1_0().create_graphics_pipelines)(
-                    api.device.handle(),
-                    api.pipeline_cache,
-                    1,
-                    &pipeline_ci,
-                    std::ptr::null(),
-                    &mut pipeline,
-                )
-            }
-            .result()?;
-            pipeline
-        };
-
-        unsafe {
-            api.device.destroy_shader_module(vertex_shader, None);
-            api.device.destroy_shader_module(fragment_shader, None);
-        }
-
-        pipeline
-    };
-
-    Ok(Shader {
-        pipeline,
-        layout,
-        render_pass,
-    })
-}
-
-/// Utility struct for a `VkBuffer` suitable for vertices and indices.
-struct GeometryBuffer {
-    handle: vk::Buffer,
-    memory: vk::DeviceMemory,
-    size: vk::DeviceSize,
-    // first_vertex is assumed to be 0
-    index_offset: vk::DeviceSize,
-}
-
-impl GeometryBuffer {
-    const NUM_INIT_VERTICES: vk::DeviceSize = 1024 * 4;
-    const NUM_INIT_INDICES: vk::DeviceSize = 1024 * 6;
-
-    /// Allocates a new buffer suitable for 1024 rects (4096 vertices and 6144
-    /// indices).
-    fn new(api: &Vulkan) -> Result<Self, vk::Result> {
-        let index_offset = Self::index_offset(api, Self::NUM_INIT_VERTICES);
-        let buffer_size = index_offset + Self::index_size(Self::NUM_INIT_INDICES);
-
-        let (handle, memory) = Self::alloc(api, buffer_size)?;
-
-        Ok(Self {
-            handle,
-            memory,
-            size: buffer_size,
-            index_offset,
-        })
-    }
-
-    /// Destroys the buffer and frees its memory from the GPU.
-    fn destroy(self, api: &Vulkan) {
-        unsafe {
-            api.device.destroy_buffer(self.handle, None);
-            api.device.free_memory(self.memory, None);
-        }
-    }
-
-    /// Copies the vertices and indices into the GPU buffer, resizing as needed
-    /// to fit the data.
-    ///
-    /// This copy _does not_ shrink the buffer, however, as there is no real
-    /// usecase for it yet.
-    fn copy(
-        &mut self,
-        api: &Vulkan,
-        vertices: &[Vertex],
-        indices: &[u16],
-    ) -> Result<(), vk::Result> {
-        let index_offset = Self::index_offset(api, vertices.len() as vk::DeviceSize);
-        let required_size = index_offset + Self::index_size(indices.len() as vk::DeviceSize);
-
-        if required_size > self.size {
-            unsafe {
-                api.device.destroy_buffer(self.handle, None);
-                api.device.free_memory(self.memory, None);
-            }
-
-            let (handle, memory) = Self::alloc(api, required_size)?;
-            self.handle = handle;
-            self.memory = memory;
-        }
-
-        // This may change even if the buffer size doesn't.
-        self.index_offset = index_offset;
-
-        unsafe {
-            let ptr = api.device.map_memory(
-                self.memory,
-                0,
-                vk::WHOLE_SIZE,
-                vk::MemoryMapFlags::empty(),
-            )?;
-
-            std::slice::from_raw_parts_mut(ptr.cast(), vertices.len()).copy_from_slice(vertices);
-
-            std::slice::from_raw_parts_mut(ptr.add(index_offset as usize).cast(), indices.len())
-                .copy_from_slice(indices);
-
-            api.device.unmap_memory(self.memory);
-        }
-
-        Ok(())
-    }
-
-    /// Allocates `size` bytes fand binds it to a buffer.
-    fn alloc(
-        api: &Vulkan,
-        size: vk::DeviceSize,
-    ) -> Result<(vk::Buffer, vk::DeviceMemory), vk::Result> {
-        let buffer = {
-            let create_info = vk::BufferCreateInfo::builder()
-                .size(size)
-                .usage(vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER);
-
-            unsafe { api.device.create_buffer(&create_info, None) }?
-        };
-
-        let memory = {
-            let requirements = unsafe { api.device.get_buffer_memory_requirements(buffer) };
-            let properties =
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::DEVICE_LOCAL;
-
-            let type_index = find_memory_type(
-                &api.physical_device.memory_properties,
-                requirements.memory_type_bits,
-                properties,
-            )
-            .ok_or(vk::Result::ERROR_UNKNOWN)?;
-
-            let create_info = vk::MemoryAllocateInfo::builder()
-                .allocation_size(requirements.size)
-                .memory_type_index(type_index);
-
-            unsafe { api.device.allocate_memory(&create_info, None) }?
-        };
-
-        unsafe { api.device.bind_buffer_memory(buffer, memory, 0) }?;
-
-        Ok((buffer, memory))
-    }
-
-    /// Calculates the offset offset into a buffer with `n_vertices`.
-    fn index_offset(api: &Vulkan, n_vertices: vk::DeviceSize) -> vk::DeviceSize {
-        let vertex_bytes = std::mem::size_of::<Vertex>() as vk::DeviceSize * n_vertices;
-        next_multiple_of(
-            vertex_bytes,
-            api.physical_device.properties.limits.non_coherent_atom_size,
-        )
-    }
-
-    /// Calculates the size of the index buffer.
-    fn index_size(n_indices: vk::DeviceSize) -> vk::DeviceSize {
-        std::mem::size_of::<u16>() as vk::DeviceSize * n_indices
     }
 }
 
@@ -1419,7 +1051,7 @@ impl Texture {
     }
 }
 
-fn find_memory_type(
+pub(self) fn find_memory_type(
     properties: &vk::PhysicalDeviceMemoryProperties,
     type_bits: u32,
     required_properties: vk::MemoryPropertyFlags,
@@ -1430,165 +1062,6 @@ fn find_memory_type(
                 .property_flags
                 .contains(required_properties)
     })
-}
-
-/// Writes everything that is needed to draw the commands to the command buffer,
-/// including `vkBeginCommandbuffer` and `vkEndCommandBuffer`. It returns a list
-/// of all the unique images that were in the command stream.
-fn write_command_buffer(
-    api: &Vulkan,
-    polygon_shader: &Shader,
-    commands: &DrawCommandList,
-    target: vk::Framebuffer,
-    viewport: vk::Extent2D,
-    geometry: &GeometryBuffer,
-    command_buffer: vk::CommandBuffer,
-) -> Result<SmallVec<[Handle<super::Image>; MAX_IMAGES as usize]>, vk::Result> {
-    unsafe {
-        api.device.begin_command_buffer(
-            command_buffer,
-            &vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-        )?;
-
-        api.device.cmd_begin_render_pass(
-            command_buffer,
-            &vk::RenderPassBeginInfo::builder()
-                .render_pass(polygon_shader.render_pass)
-                .framebuffer(target)
-                .render_area(vk::Rect2D {
-                    offset: vk::Offset2D::default(),
-                    extent: viewport,
-                })
-                .clear_values(&[vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        float32: Color::BLACK.to_array(),
-                    },
-                }]),
-            vk::SubpassContents::INLINE,
-        );
-
-        api.device.cmd_set_viewport(
-            command_buffer,
-            0,
-            &[vk::Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: viewport.width as f32,
-                height: viewport.height as f32,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            }],
-        );
-
-        api.device.cmd_set_scissor(
-            command_buffer,
-            0,
-            &[vk::Rect2D {
-                offset: vk::Offset2D::default(),
-                extent: viewport,
-            }],
-        );
-
-        let push_constants = PushConstantBytes {
-            constants: PushConstants {
-                scale: [2.0 / viewport.width as f32, 2.0 / viewport.height as f32],
-                translate: [-1.0, -1.0],
-            },
-        };
-
-        api.device.cmd_push_constants(
-            command_buffer,
-            polygon_shader.layout,
-            vk::ShaderStageFlags::VERTEX,
-            0,
-            &push_constants.bytes,
-        );
-    }
-
-    let mut textures = SmallVec::<[Handle<super::Image>; MAX_IMAGES as usize]>::new();
-    for command in commands.commands.iter().chain(commands.current.as_ref()) {
-        match command {
-            super::Command::Scissor { rect } => unsafe {
-                api.device
-                    .cmd_set_scissor(command_buffer, 0, &[vk::Rect2D::from(*rect)]);
-            },
-            super::Command::Polygon {
-                first_index,
-                num_indices,
-            } => unsafe {
-                api.device.cmd_bind_pipeline(
-                    command_buffer,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    polygon_shader.pipeline,
-                );
-
-                api.device
-                    .cmd_bind_vertex_buffers(command_buffer, 0, &[geometry.handle], &[0]);
-
-                api.device.cmd_bind_index_buffer(
-                    command_buffer,
-                    geometry.handle,
-                    geometry.index_offset,
-                    vk::IndexType::UINT16,
-                );
-
-                api.device.cmd_draw_indexed(
-                    command_buffer,
-                    u32::from(*num_indices),
-                    1,
-                    u32::from(*first_index),
-                    0,
-                    0,
-                );
-            },
-            super::Command::Texture {
-                texture,
-                first_index,
-                first_uv,
-                num_vertices,
-                num_indices,
-            } => {
-                textures.push(*texture);
-                todo!()
-            }
-        }
-    }
-
-    unsafe {
-        api.device.cmd_end_render_pass(command_buffer);
-        api.device.end_command_buffer(command_buffer)?;
-    }
-
-    textures.sort_unstable();
-    textures.dedup();
-    Ok(textures)
-}
-
-impl Vertex {
-    pub const BINDING_DESCRIPTION: vk::VertexInputBindingDescription =
-        vk::VertexInputBindingDescription {
-            binding: 0,
-            stride: std::mem::size_of::<Self>() as u32,
-            input_rate: vk::VertexInputRate::VERTEX,
-        };
-
-    pub const ATTRIBUTE_DESCRIPTIONS: [vk::VertexInputAttributeDescription; 2] = [
-        // ivec2 position
-        vk::VertexInputAttributeDescription {
-            location: 0,
-            binding: 0,
-            format: vk::Format::R16G16_SINT,
-            offset: 0,
-        },
-        // vec4 color
-        vk::VertexInputAttributeDescription {
-            location: 1,
-            binding: 0,
-            format: vk::Format::R32G32B32A32_SFLOAT,
-            offset: std::mem::size_of::<Point>() as u32,
-        },
-    ];
 }
 
 /// Helper used to check if required and optional layers and extensions exist
@@ -1705,7 +1178,7 @@ fn to_vk_format(layout: Layout, color_space: ColorSpace) -> vk::Format {
 /// stabilize.
 ///
 /// <https://github.com/rust-lang/rust/issues/88581>
-const fn next_multiple_of(lhs: vk::DeviceSize, rhs: vk::DeviceSize) -> vk::DeviceSize {
+pub(self) const fn next_multiple_of(lhs: vk::DeviceSize, rhs: vk::DeviceSize) -> vk::DeviceSize {
     match lhs % rhs {
         0 => lhs,
         r => lhs + (rhs - r),
