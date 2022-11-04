@@ -42,6 +42,8 @@ const OPTIONAL_DEVICE_EXTENSIONS: &[&[c_char]] = &[];
 const FRAMES_IN_FLIGHT: usize = 2;
 const PREFERRED_SWAPCHAIN_LENGTH: u32 = 2;
 
+type VkResult<T> = Result<T, vk::Result>;
+
 #[derive(Debug)]
 struct PhysicalDevice {
     handle: vk::PhysicalDevice,
@@ -491,7 +493,7 @@ fn regenerate_frames(
     swapchain: &Swapchain,
     shader: &UiShader,
     frames: &mut Vec<Frame>,
-) -> Result<(), vk::Result> {
+) -> VkResult<()> {
     let images = unsafe { api.swapchain_khr.get_swapchain_images(swapchain.handle) }?;
 
     // if there are more frames than images
@@ -509,52 +511,14 @@ fn regenerate_frames(
         }
 
         frame.image = *image;
-
-        frame.image_view = {
-            let create_info = vk::ImageViewCreateInfo {
-                image: *image,
-                view_type: vk::ImageViewType::TYPE_2D,
-                format: swapchain.format,
-                components: vk::ComponentMapping::default(),
-                subresource_range: vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                },
-                ..Default::default()
-            };
-
-            unsafe { api.device.create_image_view(&create_info, None) }?
-        };
-
+        frame.image_view = create_image_view(api, frame.image, swapchain.format)?;
         frame.framebuffer = shader.create_framebuffer(api, frame.image_view, swapchain.extent)?;
     }
 
     // if there are more images than frames
     for image in &images[frames.len()..] {
         let image = *image;
-
-        let image_view = {
-            let create_info = vk::ImageViewCreateInfo {
-                image,
-                view_type: vk::ImageViewType::TYPE_2D,
-                format: swapchain.format,
-                components: vk::ComponentMapping::default(),
-                subresource_range: vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                },
-                ..Default::default()
-            };
-
-            unsafe { api.device.create_image_view(&create_info, None) }?
-        };
-
+        let image_view = create_image_view(api, image, swapchain.format)?;
         let framebuffer = shader.create_framebuffer(api, image_view, swapchain.extent)?;
 
         let command_pool = {
@@ -609,7 +573,7 @@ struct FrameSync {
 }
 
 impl FrameSync {
-    fn new(device: &ash::Device) -> Result<Self, vk::Result> {
+    fn new(device: &ash::Device) -> VkResult<Self> {
         let create_info = vk::SemaphoreCreateInfo::builder();
         Ok(Self {
             acquire_semaphore: unsafe { device.create_semaphore(&create_info, None) }?,
@@ -636,15 +600,11 @@ struct Swapchain {
 }
 
 impl Swapchain {
-    fn new(
-        api: &Vulkan,
-        surface: vk::SurfaceKHR,
-        extent: vk::Extent2D,
-    ) -> Result<Self, vk::Result> {
+    fn new(api: &Vulkan, surface: vk::SurfaceKHR, extent: vk::Extent2D) -> VkResult<Self> {
         Self::create_swapchain(api, surface, extent, vk::SwapchainKHR::null())
     }
 
-    fn resize(&mut self, api: &Vulkan, extent: vk::Extent2D) -> Result<(), vk::Result> {
+    fn resize(&mut self, api: &Vulkan, extent: vk::Extent2D) -> VkResult<()> {
         unsafe { api.device.device_wait_idle() }?;
         let new = Self::create_swapchain(api, self.surface, extent, self.handle)?;
         unsafe { api.swapchain_khr.destroy_swapchain(self.handle, None) };
@@ -663,7 +623,7 @@ impl Swapchain {
         surface: vk::SurfaceKHR,
         #[allow(unused)] extent: vk::Extent2D,
         old_swapchain: vk::SwapchainKHR,
-    ) -> Result<Swapchain, vk::Result> {
+    ) -> VkResult<Swapchain> {
         let vk::SurfaceFormatKHR {
             format,
             color_space,
@@ -785,7 +745,7 @@ struct WindowData {
 
 impl WindowData {
     #[cfg(target_os = "windows")]
-    fn new(api: &Vulkan, hwnd: windows::Win32::Foundation::HWND) -> Result<Self, vk::Result> {
+    fn new(api: &Vulkan, hwnd: windows::Win32::Foundation::HWND) -> VkResult<Self> {
         use windows::Win32::{
             Foundation::RECT, System::LibraryLoader::GetModuleHandleW,
             UI::WindowsAndMessaging::GetClientRect,
@@ -816,11 +776,7 @@ impl WindowData {
 
     /// Platform-independent code for initializing a window. See `new` for the
     /// platform-dependent coe needed to call this method.
-    fn _new(
-        api: &Vulkan,
-        surface: vk::SurfaceKHR,
-        extent: vk::Extent2D,
-    ) -> Result<Self, vk::Result> {
+    fn _new(api: &Vulkan, surface: vk::SurfaceKHR, extent: vk::Extent2D) -> VkResult<Self> {
         let swapchain = Swapchain::new(api, surface, extent)?;
         let shader = UiShader::new(api, swapchain.format)?;
 
@@ -838,7 +794,7 @@ impl WindowData {
     }
 
     /// Resize the swapchain and create the necessary per-frame data.
-    fn resize(&mut self, api: &Vulkan, extent: vk::Extent2D) -> Result<(), vk::Result> {
+    fn resize(&mut self, api: &Vulkan, extent: vk::Extent2D) -> VkResult<()> {
         unsafe { api.device.device_wait_idle() }?;
         self.swapchain.resize(api, extent)?;
         regenerate_frames(api, &self.swapchain, &self.shader, &mut self.frames)
@@ -864,7 +820,7 @@ impl WindowData {
         }
     }
 
-    fn present(&mut self, api: &Vulkan) -> Result<(), vk::Result> {
+    fn present(&mut self, api: &Vulkan) -> VkResult<()> {
         let sync = &self.frame_sync[self.frame_id as usize % self.frame_sync.len()];
 
         if let Some(index) = self.current_image.take() {
@@ -923,7 +879,7 @@ impl Texture {
         layout: Layout,
         color_space: ColorSpace,
         extent: Extent,
-    ) -> Result<Self, vk::Result> {
+    ) -> VkResult<Self> {
         let format = to_vk_format(layout, color_space);
 
         let image = {
@@ -968,25 +924,7 @@ impl Texture {
 
         unsafe { api.device.bind_image_memory(image, memory, 0) }?;
 
-        let image_view = {
-            let create_info = vk::ImageViewCreateInfo {
-                flags: vk::ImageViewCreateFlags::empty(),
-                image,
-                view_type: vk::ImageViewType::TYPE_2D,
-                format,
-                components: vk::ComponentMapping::default(),
-                subresource_range: vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                },
-                ..Default::default()
-            };
-
-            unsafe { api.device.create_image_view(&create_info, None) }?
-        };
+        let image_view = create_image_view(api, image, format)?;
 
         let write_semaphore = {
             let timeline_info = vk::SemaphoreTypeCreateInfo {
@@ -1029,7 +967,7 @@ impl Texture {
         })
     }
 
-    fn is_idle(&self, api: &Vulkan) -> Result<bool, vk::Result> {
+    fn is_idle(&self, api: &Vulkan) -> VkResult<bool> {
         let write_count = unsafe { api.device.get_semaphore_counter_value(self.write_semaphore) }?;
         let read_count = unsafe { api.device.get_semaphore_counter_value(self.read_semaphore) }?;
         Ok(write_count == self.write_count && read_count == self.read_count)
@@ -1062,6 +1000,30 @@ pub(self) fn find_memory_type(
                 .property_flags
                 .contains(required_properties)
     })
+}
+
+fn create_image_view(
+    api: &Vulkan,
+    image: vk::Image,
+    format: vk::Format,
+) -> VkResult<vk::ImageView> {
+    let create_info = vk::ImageViewCreateInfo {
+        flags: vk::ImageViewCreateFlags::empty(),
+        image,
+        view_type: vk::ImageViewType::TYPE_2D,
+        format,
+        components: vk::ComponentMapping::default(),
+        subresource_range: vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        },
+        ..Default::default()
+    };
+
+    unsafe { api.device.create_image_view(&create_info, None) }
 }
 
 /// Helper used to check if required and optional layers and extensions exist
