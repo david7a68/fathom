@@ -1,7 +1,5 @@
 use ash::vk;
 
-use crate::gfx::vulkan::create_image_view;
-
 use super::{
     ui_shader::{UiGeometryBuffer, UiShader},
     VkResult, Vulkan, FRAMES_IN_FLIGHT, PREFERRED_SWAPCHAIN_LENGTH,
@@ -84,7 +82,7 @@ impl Window {
             frame_id: 0,
             current_image: None,
             frames,
-            frame_sync: [FrameSync::new(&api.device)?, FrameSync::new(&api.device)?],
+            frame_sync: [FrameSync::new(api)?, FrameSync::new(api)?],
         })
     }
 
@@ -231,14 +229,14 @@ fn regenerate_frames(
         }
 
         frame.image = *image;
-        frame.image_view = create_image_view(api, frame.image, swapchain.format)?;
+        frame.image_view = api.create_image_view(frame.image, swapchain.format)?;
         frame.framebuffer = shader.create_framebuffer(api, frame.image_view, swapchain.extent)?;
     }
 
     // if there are more images than frames
     for image in &images[frames.len()..] {
         let image = *image;
-        let image_view = create_image_view(api, image, swapchain.format)?;
+        let image_view = api.create_image_view(image, swapchain.format)?;
         let framebuffer = shader.create_framebuffer(api, image_view, swapchain.extent)?;
 
         let command_pool = {
@@ -414,11 +412,10 @@ pub struct FrameSync {
 }
 
 impl FrameSync {
-    fn new(device: &ash::Device) -> VkResult<Self> {
-        let create_info = vk::SemaphoreCreateInfo::builder();
+    fn new(api: &Vulkan) -> VkResult<Self> {
         Ok(Self {
-            acquire_semaphore: unsafe { device.create_semaphore(&create_info, None) }?,
-            present_semaphore: unsafe { device.create_semaphore(&create_info, None) }?,
+            acquire_semaphore: api.create_semaphore(false)?,
+            present_semaphore: api.create_semaphore(false)?,
         })
     }
 

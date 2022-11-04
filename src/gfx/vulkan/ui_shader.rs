@@ -6,7 +6,7 @@ use crate::{
     handle_pool::Handle,
 };
 
-use super::{find_memory_type, next_multiple_of, Vulkan};
+use super::{next_multiple_of, Vulkan};
 
 const SHADER_MAIN: *const i8 = b"main\0".as_ptr().cast();
 const UI_FRAG_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.frag.spv"));
@@ -501,7 +501,7 @@ impl UiGeometryBuffer {
             let properties =
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::DEVICE_LOCAL;
 
-            let type_index = find_memory_type(
+            let type_index = Vulkan::find_memory_type(
                 &api.physical_device.memory_properties,
                 requirements.memory_type_bits,
                 properties,

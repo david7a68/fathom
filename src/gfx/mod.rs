@@ -247,12 +247,7 @@ pub trait GfxDevice {
     fn present_swapchain_images(&self, handles: &[Handle<Swapchain>]) -> Result<(), Error>;
 
     /// Creates an image that can be used in rendering operations.
-    fn create_image(
-        &self,
-        layout: Layout,
-        color_space: ColorSpace,
-        extent: Extent,
-    ) -> Result<Handle<Image>, Error>;
+    fn create_image(&self, extent: Extent) -> Result<Handle<Image>, Error>;
 
     /// Uploads an image from a pixel buffer so that it can be used for
     /// rendering operations.

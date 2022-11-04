@@ -1,3 +1,4 @@
+mod texture;
 mod ui_shader;
 mod window;
 
@@ -8,7 +9,7 @@ use smallvec::SmallVec;
 
 use crate::handle_pool::{Handle, HandlePool};
 
-use self::window::Window;
+use self::{texture::Texture, window::Window};
 
 use super::{
     geometry::{Extent, Rect},
@@ -217,6 +218,58 @@ impl Vulkan {
             images: RefCell::new(HandlePool::preallocate_n(8)),
         })
     }
+
+    pub(self) fn find_memory_type(
+        properties: &vk::PhysicalDeviceMemoryProperties,
+        type_bits: u32,
+        required_properties: vk::MemoryPropertyFlags,
+    ) -> Option<u32> {
+        (0..properties.memory_type_count).find(|&i| {
+            (type_bits & (1 << i)) != 0
+                && properties.memory_types[i as usize]
+                    .property_flags
+                    .contains(required_properties)
+        })
+    }
+
+    fn create_image_view(&self, image: vk::Image, format: vk::Format) -> VkResult<vk::ImageView> {
+        let create_info = vk::ImageViewCreateInfo {
+            flags: vk::ImageViewCreateFlags::empty(),
+            image,
+            view_type: vk::ImageViewType::TYPE_2D,
+            format,
+            components: vk::ComponentMapping::default(),
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            ..Default::default()
+        };
+
+        unsafe { self.device.create_image_view(&create_info, None) }
+    }
+
+    pub fn create_semaphore(&self, timeline: bool) -> VkResult<vk::Semaphore> {
+        let timeline_info = vk::SemaphoreTypeCreateInfo {
+            semaphore_type: vk::SemaphoreType::TIMELINE,
+            initial_value: 0,
+            ..Default::default()
+        };
+
+        let create_info = vk::SemaphoreCreateInfo {
+            p_next: if timeline {
+                &timeline_info as *const vk::SemaphoreTypeCreateInfo as *const _
+            } else {
+                std::ptr::null()
+            },
+            ..Default::default()
+        };
+
+        unsafe { self.device.create_semaphore(&create_info, None) }
+    }
 }
 
 impl Drop for Vulkan {
@@ -285,16 +338,11 @@ impl GfxDevice for Vulkan {
         Ok(())
     }
 
-    fn create_image(
-        &self,
-        layout: Layout,
-        color_space: ColorSpace,
-        extent: Extent,
-    ) -> Result<Handle<super::Image>, Error> {
+    fn create_image(&self, extent: Extent) -> Result<Handle<super::Image>, Error> {
         Ok(self
             .images
             .borrow_mut()
-            .insert(Texture::new(self, layout, color_space, extent)?)?)
+            .insert(Texture::new(self, extent)?)?)
     }
 
     fn upload_image(&self, pixels: &PixelBuffer) -> Result<Handle<super::Image>, Error> {
@@ -444,177 +492,6 @@ enum RenderTarget {
     Swapchain(Handle<super::Swapchain>, u64),
 }
 
-struct Texture {
-    image: vk::Image,
-    image_view: vk::ImageView,
-    memory: vk::DeviceMemory,
-    /// A timeline semaphore used to track write operations. If
-    /// `write_semaphore==write_count`, the texture is not currently being
-    /// written to and can be used for reading.
-    write_semaphore: vk::Semaphore,
-    /// A count of the number of write operations executed on this texture.
-    write_count: u64,
-    /// A timeline semaphore used to track read operations. If
-    /// `read_semaphore==read_count`, the texture is not currently being read
-    /// and can be used for write operations.
-    read_semaphore: vk::Semaphore,
-    /// A count of the number of read operations executed on this texture.
-    read_count: u64,
-}
-
-impl Texture {
-    fn new(
-        api: &Vulkan,
-        layout: Layout,
-        color_space: ColorSpace,
-        extent: Extent,
-    ) -> VkResult<Self> {
-        let format = to_vk_format(layout, color_space);
-
-        let image = {
-            let create_info = vk::ImageCreateInfo {
-                flags: vk::ImageCreateFlags::empty(),
-                image_type: vk::ImageType::TYPE_2D,
-                format,
-                extent: vk::Extent3D {
-                    width: extent.width.0 as u32,
-                    height: extent.height.0 as u32,
-                    depth: 1,
-                },
-                mip_levels: 1,
-                array_layers: 1,
-                samples: vk::SampleCountFlags::TYPE_1,
-                tiling: vk::ImageTiling::OPTIMAL,
-                usage: vk::ImageUsageFlags::SAMPLED,
-                initial_layout: vk::ImageLayout::UNDEFINED,
-                ..Default::default()
-            };
-
-            unsafe { api.device.create_image(&create_info, None) }?
-        };
-
-        let memory = {
-            let requirements = unsafe { api.device.get_image_memory_requirements(image) };
-            let properties = vk::MemoryPropertyFlags::DEVICE_LOCAL;
-
-            let type_index = find_memory_type(
-                &api.physical_device.memory_properties,
-                requirements.memory_type_bits,
-                properties,
-            )
-            .ok_or(vk::Result::ERROR_UNKNOWN)?;
-
-            let create_info = vk::MemoryAllocateInfo::builder()
-                .allocation_size(requirements.size)
-                .memory_type_index(type_index);
-
-            unsafe { api.device.allocate_memory(&create_info, None) }?
-        };
-
-        unsafe { api.device.bind_image_memory(image, memory, 0) }?;
-
-        let image_view = create_image_view(api, image, format)?;
-
-        let write_semaphore = {
-            let timeline_info = vk::SemaphoreTypeCreateInfo {
-                semaphore_type: vk::SemaphoreType::TIMELINE,
-                initial_value: 0,
-                ..Default::default()
-            };
-
-            let create_info = vk::SemaphoreCreateInfo {
-                p_next: &timeline_info as *const vk::SemaphoreTypeCreateInfo as *const _,
-                ..Default::default()
-            };
-
-            unsafe { api.device.create_semaphore(&create_info, None) }?
-        };
-
-        let read_semaphore = {
-            let timeline_info = vk::SemaphoreTypeCreateInfo {
-                semaphore_type: vk::SemaphoreType::TIMELINE,
-                initial_value: 0,
-                ..Default::default()
-            };
-
-            let create_info = vk::SemaphoreCreateInfo {
-                p_next: &timeline_info as *const vk::SemaphoreTypeCreateInfo as *const _,
-                ..Default::default()
-            };
-
-            unsafe { api.device.create_semaphore(&create_info, None) }?
-        };
-
-        Ok(Self {
-            image,
-            image_view,
-            memory,
-            write_semaphore,
-            write_count: 0,
-            read_semaphore,
-            read_count: 0,
-        })
-    }
-
-    fn is_idle(&self, api: &Vulkan) -> VkResult<bool> {
-        let write_count = unsafe { api.device.get_semaphore_counter_value(self.write_semaphore) }?;
-        let read_count = unsafe { api.device.get_semaphore_counter_value(self.read_semaphore) }?;
-        Ok(write_count == self.write_count && read_count == self.read_count)
-    }
-
-    fn destroy(self, api: &Vulkan) {
-        assert!(
-            self.is_idle(api).unwrap(),
-            "must not destory an image that is in use"
-        );
-        unsafe {
-            api.device.destroy_image_view(self.image_view, None);
-            api.device.destroy_image(self.image, None);
-            api.device.free_memory(self.memory, None);
-
-            api.device.destroy_semaphore(self.write_semaphore, None);
-            api.device.destroy_semaphore(self.read_semaphore, None);
-        }
-    }
-}
-
-pub(self) fn find_memory_type(
-    properties: &vk::PhysicalDeviceMemoryProperties,
-    type_bits: u32,
-    required_properties: vk::MemoryPropertyFlags,
-) -> Option<u32> {
-    (0..properties.memory_type_count).find(|&i| {
-        (type_bits & (1 << i)) != 0
-            && properties.memory_types[i as usize]
-                .property_flags
-                .contains(required_properties)
-    })
-}
-
-fn create_image_view(
-    api: &Vulkan,
-    image: vk::Image,
-    format: vk::Format,
-) -> VkResult<vk::ImageView> {
-    let create_info = vk::ImageViewCreateInfo {
-        flags: vk::ImageViewCreateFlags::empty(),
-        image,
-        view_type: vk::ImageViewType::TYPE_2D,
-        format,
-        components: vk::ComponentMapping::default(),
-        subresource_range: vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        },
-        ..Default::default()
-    };
-
-    unsafe { api.device.create_image_view(&create_info, None) }
-}
-
 /// Helper used to check if required and optional layers and extensions exist
 /// within a set of items.
 ///
@@ -713,16 +590,6 @@ fn select_gpu(
         }
     }
     Err(Error::NoGraphicsDevice)
-}
-
-fn to_vk_format(layout: Layout, color_space: ColorSpace) -> vk::Format {
-    match layout {
-        // We only use RGBA textures for convenience
-        Layout::RGB8 | Layout::RGBA8 => match color_space {
-            ColorSpace::Linear => vk::Format::R8G8B8A8_UINT,
-            ColorSpace::Srgb => vk::Format::R8G8B8A8_SRGB,
-        },
-    }
 }
 
 /// Copied from unstable std while waiting for #![`feature(int_roundigs)`] to
