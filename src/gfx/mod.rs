@@ -3,7 +3,7 @@ use crate::handle_pool::Handle;
 use self::{
     color::Color,
     geometry::{Extent, Point, Rect},
-    pixel_buffer::{ColorSpace, Layout, PixelBuffer},
+    pixel_buffer::{PixelBuffer, PixelBufferView},
 };
 
 pub mod color;
@@ -28,6 +28,8 @@ pub enum Error {
     InvalidHandle,
     #[error("the swapchain's features are out of sync of the window that it is bound to, update the swapchain and try again")]
     SwapchainOutOfDate,
+    #[error("the image cannot be copied as described without resampling, but resampling was disabled")]
+    MustResampleImage,
     #[from(ash::vk::Result)]
     #[error("an unhandled error in the Vulkan backend occurred")]
     VulkanInternal {
@@ -68,6 +70,20 @@ pub struct SubImageUpdate {
 
 pub enum Draw {
     Rect { rect: Rect, paint: Paint },
+}
+
+/// Defines methods by which images can be resampled during scaling (resizing)
+/// operations.
+pub enum Resample {
+    None,
+    /// Uses (bi)cubic filtering to interpolate colors. This is higher-quality
+    /// but slower than linear filtering.
+    Cubic,
+    /// Uses (bi)linear filtering to interpolate colors.
+    Linear,
+    /// Crops the image or fills any extra space with [`Color::ZERO`] as
+    /// necessary.
+    CropFill,
 }
 
 #[derive(Debug)]
@@ -252,21 +268,35 @@ pub trait GfxDevice {
     /// Uploads an image from a pixel buffer so that it can be used for
     /// rendering operations.
     ///
-    /// This is equivalent to the following:
-    ///
-    /// ```ignore
-    /// let image = gfx.create_image(pixels.layout(), pixels.color_space())?;
-    /// gfx.update_image(pixels, Rect::new(Offset::zero(), pixels.extent()), image, Offset::zero())?;
-    /// ```
-    fn upload_image(&self, pixels: &PixelBuffer) -> Result<Handle<Image>, Error>;
-
-    /// Copies the desired areas from `src` into `dst`, performing format and
-    /// color-space transformations as necessary.
-    fn update_image(
+    /// If the stated extent does not agree with the buffer view's extent,
+    /// `resample_mode` is used to determine how the image will be rescaled.
+    /// 
+    /// ## Errors
+    /// 
+    /// Will return `Error::MustResampleImage` if `extent != pixels.extent()`
+    /// and resampling has been disabled with [`Resample::None`].
+    fn upload_image(
         &self,
-        src: &PixelBuffer,
+        extent: Extent,
+        pixels: PixelBufferView,
+        resample_mode: Resample,
+    ) -> Result<Handle<Image>, Error>;
+
+    /// Copies part of `src` into `dst`, resampling as necessary according to
+    /// `resample_mode`.
+    /// 
+    /// ## Errors
+    /// 
+    /// Will return `Error::MustResampleImage` if `src_area.extent !=
+    /// dst_area.extent` and resampling has been disabled with
+    /// [`Resample::None`].
+    fn copy_image(
+        &self,
+        src: Handle<Image>,
+        src_area: Rect,
         dst: Handle<Image>,
-        areas: &[SubImageUpdate],
+        dst_area: Rect,
+        resample_mode: Resample,
     ) -> Result<(), Error>;
 
     /// Deletes the image, freeing any resources that were associated with it.

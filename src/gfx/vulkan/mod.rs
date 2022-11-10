@@ -13,8 +13,8 @@ use self::{texture::Texture, window::Window};
 
 use super::{
     geometry::{Extent, Rect},
-    pixel_buffer::{ColorSpace, Layout, PixelBuffer},
-    DrawCommandList, Error, GfxDevice, SubImageUpdate, MAX_IMAGES, MAX_SWAPCHAINS,
+    pixel_buffer::{ColorSpace, Layout, PixelBuffer, PixelBufferView},
+    DrawCommandList, Error, GfxDevice, Resample, SubImageUpdate, MAX_IMAGES, MAX_SWAPCHAINS,
 };
 
 const fn as_cchar_slice(slice: &[u8]) -> &[c_char] {
@@ -345,15 +345,22 @@ impl GfxDevice for Vulkan {
             .insert(Texture::new(self, extent)?)?)
     }
 
-    fn upload_image(&self, pixels: &PixelBuffer) -> Result<Handle<super::Image>, Error> {
+    fn upload_image(
+        &self,
+        extent: Extent,
+        pixels: PixelBufferView,
+        resample_mode: Resample,
+    ) -> Result<Handle<super::Image>, Error> {
         todo!()
     }
 
-    fn update_image(
+    fn copy_image(
         &self,
-        src: &PixelBuffer,
+        src: Handle<super::Image>,
+        src_area: Rect,
         dst: Handle<super::Image>,
-        areas: &[SubImageUpdate],
+        dst_area: Rect,
+        resample_mode: Resample,
     ) -> Result<(), Error> {
         todo!()
     }
