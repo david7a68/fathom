@@ -6,7 +6,10 @@ use crate::{
     handle_pool::Handle,
 };
 
-use super::{next_multiple_of, Vulkan};
+use super::{
+    api::{next_multiple_of, Vulkan},
+    MemoryUsage,
+};
 
 const SHADER_MAIN: *const i8 = b"main\0".as_ptr().cast();
 const UI_FRAG_SHADER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ui.frag.spv"));
@@ -418,7 +421,11 @@ impl UiGeometryBuffer {
         let index_offset = Self::index_offset(api, Self::NUM_INIT_VERTICES);
         let buffer_size = index_offset + Self::index_size(Self::NUM_INIT_INDICES);
 
-        let (handle, memory) = Self::alloc(api, buffer_size)?;
+        let (handle, memory) = api.allocate_buffer(
+            MemoryUsage::Dynamic,
+            buffer_size,
+            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER,
+        )?;
 
         Ok(Self {
             handle,
@@ -456,7 +463,12 @@ impl UiGeometryBuffer {
                 api.device.free_memory(self.memory, None);
             }
 
-            let (handle, memory) = Self::alloc(api, required_size)?;
+            let (handle, memory) = api.allocate_buffer(
+                MemoryUsage::Dynamic,
+                required_size,
+                vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER,
+            )?;
+
             self.handle = handle;
             self.memory = memory;
         }
@@ -481,43 +493,6 @@ impl UiGeometryBuffer {
         }
 
         Ok(())
-    }
-
-    /// Allocates `size` bytes fand binds it to a buffer.
-    fn alloc(
-        api: &Vulkan,
-        size: vk::DeviceSize,
-    ) -> Result<(vk::Buffer, vk::DeviceMemory), vk::Result> {
-        let buffer = {
-            let create_info = vk::BufferCreateInfo::builder()
-                .size(size)
-                .usage(vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER);
-
-            unsafe { api.device.create_buffer(&create_info, None) }?
-        };
-
-        let memory = {
-            let requirements = unsafe { api.device.get_buffer_memory_requirements(buffer) };
-            let properties =
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::DEVICE_LOCAL;
-
-            let type_index = Vulkan::find_memory_type(
-                &api.physical_device.memory_properties,
-                requirements.memory_type_bits,
-                properties,
-            )
-            .ok_or(vk::Result::ERROR_UNKNOWN)?;
-
-            let create_info = vk::MemoryAllocateInfo::builder()
-                .allocation_size(requirements.size)
-                .memory_type_index(type_index);
-
-            unsafe { api.device.allocate_memory(&create_info, None) }?
-        };
-
-        unsafe { api.device.bind_buffer_memory(buffer, memory, 0) }?;
-
-        Ok((buffer, memory))
     }
 
     /// Calculates the offset offset into a buffer with `n_vertices`.

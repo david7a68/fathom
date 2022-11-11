@@ -2,7 +2,7 @@ use crate::handle_pool::Handle;
 
 use self::{
     color::Color,
-    geometry::{Extent, Point, Rect},
+    geometry::{Extent, Point, Rect, Offset},
     pixel_buffer::{PixelBuffer, PixelBufferView},
 };
 
@@ -28,7 +28,9 @@ pub enum Error {
     InvalidHandle,
     #[error("the swapchain's features are out of sync of the window that it is bound to, update the swapchain and try again")]
     SwapchainOutOfDate,
-    #[error("the image cannot be copied as described without resampling, but resampling was disabled")]
+    #[error(
+        "the image cannot be copied as described without resampling, but resampling was disabled"
+    )]
     MustResampleImage,
     #[from(ash::vk::Result)]
     #[error("an unhandled error in the Vulkan backend occurred")]
@@ -63,27 +65,13 @@ pub enum Paint {
     Fill { color: Color },
 }
 
-pub struct SubImageUpdate {
-    pub source_area: Rect,
-    pub sub_image_origin: Point,
+pub struct ImageCopy {
+    pub src_rect: Rect,
+    pub dst_location: Offset,
 }
 
 pub enum Draw {
     Rect { rect: Rect, paint: Paint },
-}
-
-/// Defines methods by which images can be resampled during scaling (resizing)
-/// operations.
-pub enum Resample {
-    None,
-    /// Uses (bi)cubic filtering to interpolate colors. This is higher-quality
-    /// but slower than linear filtering.
-    Cubic,
-    /// Uses (bi)linear filtering to interpolate colors.
-    Linear,
-    /// Crops the image or fills any extra space with [`Color::ZERO`] as
-    /// necessary.
-    CropFill,
 }
 
 #[derive(Debug)]
@@ -265,38 +253,37 @@ pub trait GfxDevice {
     /// Creates an image that can be used in rendering operations.
     fn create_image(&self, extent: Extent) -> Result<Handle<Image>, Error>;
 
-    /// Uploads an image from a pixel buffer so that it can be used for
-    /// rendering operations.
+    /// Copies portions of a pixel buffer to a target image for rendering.
+    /// Operations involving areas beyond the pixel buffer view _or_ the target
+    /// image will be clipped away.
     ///
-    /// If the stated extent does not agree with the buffer view's extent,
+    /// If an copy operation's extents disagree, the the selected
     /// `resample_mode` is used to determine how the image will be rescaled.
-    /// 
+    ///
     /// ## Errors
-    /// 
-    /// Will return `Error::MustResampleImage` if `extent != pixels.extent()`
-    /// and resampling has been disabled with [`Resample::None`].
-    fn upload_image(
+    ///
+    /// Will return `Error::MustResampleImage` if `op.must_resample()` and
+    /// resampling has been disabled with [`Resample::None`].
+    fn copy_pixels(
         &self,
-        extent: Extent,
-        pixels: PixelBufferView,
-        resample_mode: Resample,
-    ) -> Result<Handle<Image>, Error>;
+        src: PixelBufferView,
+        dst: Handle<Image>,
+        ops: &[ImageCopy],
+    ) -> Result<(), Error>;
 
     /// Copies part of `src` into `dst`, resampling as necessary according to
-    /// `resample_mode`.
-    /// 
+    /// `resample_mode`. Operations involving areas beyond the pixel buffer view
+    /// _or_ the target image will be clipped away.
+    ///
     /// ## Errors
-    /// 
-    /// Will return `Error::MustResampleImage` if `src_area.extent !=
-    /// dst_area.extent` and resampling has been disabled with
-    /// [`Resample::None`].
+    ///
+    /// Will return `Error::MustResampleImage` if `op.must_resample()` and
+    /// resampling has been disabled with [`Resample::None`].
     fn copy_image(
         &self,
         src: Handle<Image>,
-        src_area: Rect,
         dst: Handle<Image>,
-        dst_area: Rect,
-        resample_mode: Resample,
+        ops: &[ImageCopy],
     ) -> Result<(), Error>;
 
     /// Deletes the image, freeing any resources that were associated with it.
@@ -335,5 +322,5 @@ pub trait GfxDevice {
 }
 
 pub fn init_gfx() -> Result<Box<dyn GfxDevice>, Error> {
-    Ok(Box::new(self::vulkan::Vulkan::new(true)?))
+    Ok(Box::new(self::vulkan::VulkanGfxDevice::new(true)?))
 }

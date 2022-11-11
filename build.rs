@@ -39,5 +39,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     }
 
+    {
+        let source = std::fs::read_to_string("resources/shaders/image_upload_uint.glsl")?;
+        let binary = compiler.compile_into_spirv(
+            &source,
+            ShaderKind::Compute,
+            "image_upload_uint.glsl",
+            "main",
+            Some(&options),
+        )?;
+        std::fs::write(
+            std::path::Path::new(&out_dir).join("image_upload_uint.spv"),
+            binary.as_binary_u8(),
+        )?;
+    }
+
     Ok(())
 }

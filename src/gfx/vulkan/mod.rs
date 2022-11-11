@@ -1,3 +1,4 @@
+mod api;
 mod texture;
 mod ui_shader;
 mod window;
@@ -9,12 +10,16 @@ use smallvec::SmallVec;
 
 use crate::handle_pool::{Handle, HandlePool};
 
-use self::{texture::Texture, window::Window};
+use self::{
+    api::{MemoryUsage, Vulkan},
+    texture::{Staging, Texture},
+    window::Window,
+};
 
 use super::{
     geometry::{Extent, Rect},
-    pixel_buffer::{ColorSpace, Layout, PixelBuffer, PixelBufferView},
-    DrawCommandList, Error, GfxDevice, Resample, SubImageUpdate, MAX_IMAGES, MAX_SWAPCHAINS,
+    pixel_buffer::{PixelBuffer, PixelBufferView},
+    DrawCommandList, Error, GfxDevice, ImageCopy, MAX_IMAGES, MAX_SWAPCHAINS,
 };
 
 const fn as_cchar_slice(slice: &[u8]) -> &[c_char] {
@@ -41,254 +46,55 @@ const OPTIONAL_DEVICE_EXTENSIONS: &[&[c_char]] = &[];
 const FRAMES_IN_FLIGHT: usize = 2;
 const PREFERRED_SWAPCHAIN_LENGTH: u32 = 2;
 
-type VkResult<T> = Result<T, vk::Result>;
-
-#[derive(Debug)]
-struct PhysicalDevice {
-    handle: vk::PhysicalDevice,
-    properties: vk::PhysicalDeviceProperties,
-    memory_properties: vk::PhysicalDeviceMemoryProperties,
-    graphics_queue_family: u32,
-    transfer_queue_family: u32,
-    present_queue_family: u32,
-}
-
-pub struct Vulkan {
-    #[allow(unused)]
-    entry: ash::Entry,
-    instance: ash::Instance,
-    device: ash::Device,
-
-    physical_device: PhysicalDevice,
-
-    pipeline_cache: vk::PipelineCache,
-    graphics_queue: vk::Queue,
-    transfer_queue: vk::Queue,
-    present_queue: vk::Queue,
-
-    surface_khr: ash::extensions::khr::Surface,
-    swapchain_khr: ash::extensions::khr::Swapchain,
-
-    #[cfg(target_os = "windows")]
-    win32_surface_khr: ash::extensions::khr::Win32Surface,
+pub struct VulkanGfxDevice {
+    api: Vulkan,
 
     windows: RefCell<HandlePool<Window, super::Swapchain, MAX_SWAPCHAINS>>,
     render_targets: RefCell<HandlePool<RenderTarget, super::RenderTarget, 128>>,
     images: RefCell<HandlePool<Texture, super::Image, MAX_IMAGES>>,
+    staging: RefCell<Staging>,
 }
 
-impl Vulkan {
+impl VulkanGfxDevice {
     pub fn new(with_debug: bool) -> Result<Self, Error> {
-        let entry = unsafe { ash::Entry::load() }
-            .map_err(|_| Error::BackendNotFound)
-            .unwrap();
+        let mut optional_instance_layers = SmallVec::<[&[c_char]; 1]>::new();
+        if with_debug {
+            optional_instance_layers.push(VALIDATION_LAYER);
+        }
 
-        let instance = {
-            let instance_layers = {
-                let mut optional = SmallVec::<[&[c_char]; 1]>::new();
-                if with_debug {
-                    optional.push(VALIDATION_LAYER);
-                }
+        let api = Vulkan::new(
+            REQUIRED_INSTANCE_LAYERS,
+            &optional_instance_layers,
+            REQUIRED_INSTANCE_EXTENSIONS,
+            OPTIONAL_INSTANCE_EXTENSIONS,
+            REQUIRED_DEVICE_EXTENSIONS,
+            OPTIONAL_DEVICE_EXTENSIONS,
+        )?;
 
-                has_names(
-                    &entry.enumerate_instance_layer_properties()?,
-                    |layer| &layer.layer_name,
-                    REQUIRED_INSTANCE_LAYERS,
-                    &optional,
-                )
-                .ok_or(Error::VulkanInternal {
-                    error_code: vk::Result::ERROR_INITIALIZATION_FAILED,
-                })?
-            };
-
-            let instance_extensions = has_names(
-                &entry.enumerate_instance_extension_properties(None)?,
-                |extension| &extension.extension_name,
-                REQUIRED_INSTANCE_EXTENSIONS,
-                OPTIONAL_INSTANCE_EXTENSIONS,
-            )
-            .ok_or(Error::VulkanInternal {
-                error_code: vk::Result::ERROR_INITIALIZATION_FAILED,
-            })?;
-
-            let app_info = vk::ApplicationInfo {
-                api_version: vk::make_api_version(0, 1, 2, 0),
-                ..Default::default()
-            };
-
-            let create_info = vk::InstanceCreateInfo {
-                p_application_info: &app_info,
-                enabled_layer_count: instance_layers.len() as u32,
-                pp_enabled_layer_names: instance_layers.as_ptr(),
-                enabled_extension_count: instance_extensions.len() as u32,
-                pp_enabled_extension_names: instance_extensions.as_ptr(),
-                ..Default::default()
-            };
-
-            unsafe { entry.create_instance(&create_info, None) }?
-        };
-
-        let surface_khr = ash::extensions::khr::Surface::new(&entry, &instance);
-
-        #[cfg(target_os = "windows")]
-        let win32_surface_khr = ash::extensions::khr::Win32Surface::new(&entry, &instance);
-
-        let (gpu, device_extensions) = select_gpu(&instance, |gpu, queue| unsafe {
-            #[cfg(target_os = "windows")]
-            win32_surface_khr.get_physical_device_win32_presentation_support(gpu, queue)
-        })?;
-
-        let device = {
-            let queue_priority = 1.0;
-            let mut queues = SmallVec::<[vk::DeviceQueueCreateInfo; 3]>::new();
-
-            queues.push(
-                vk::DeviceQueueCreateInfo::builder()
-                    .queue_family_index(gpu.graphics_queue_family)
-                    .queue_priorities(&[queue_priority])
-                    .build(),
-            );
-
-            if gpu.graphics_queue_family != gpu.transfer_queue_family {
-                queues.push(
-                    vk::DeviceQueueCreateInfo::builder()
-                        .queue_family_index(gpu.transfer_queue_family)
-                        .queue_priorities(&[queue_priority])
-                        .build(),
-                );
-            }
-
-            if gpu.graphics_queue_family != gpu.present_queue_family {
-                queues.push(
-                    vk::DeviceQueueCreateInfo::builder()
-                        .queue_family_index(gpu.present_queue_family)
-                        .queue_priorities(&[queue_priority])
-                        .build(),
-                );
-            }
-
-            // Enable timeline semaphores
-            let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
-            let mut features = vk::PhysicalDeviceFeatures2::builder().push_next(&mut features12);
-            unsafe { instance.get_physical_device_features2(gpu.handle, &mut features) };
-
-            let mut features = if features12.timeline_semaphore == vk::TRUE {
-                features12 = vk::PhysicalDeviceVulkan12Features::default();
-                features12.timeline_semaphore = vk::TRUE;
-                vk::PhysicalDeviceFeatures2::builder()
-                    .push_next(&mut features12)
-                    .build()
-            } else {
-                return Err(Error::NoGraphicsDevice);
-            };
-
-            let create_info = vk::DeviceCreateInfo::builder()
-                .push_next(&mut features)
-                .queue_create_infos(&queues)
-                .enabled_extension_names(&device_extensions);
-
-            unsafe { instance.create_device(gpu.handle, &create_info, None) }?
-        };
-
-        let pipeline_cache = {
-            let create_info = vk::PipelineCacheCreateInfo::default();
-            unsafe { device.create_pipeline_cache(&create_info, None) }?
-        };
-
-        let graphics_queue = unsafe { device.get_device_queue(gpu.graphics_queue_family, 0) };
-        let transfer_queue = unsafe { device.get_device_queue(gpu.transfer_queue_family, 0) };
-        let present_queue = unsafe { device.get_device_queue(gpu.present_queue_family, 0) };
-
-        let swapchain_khr = ash::extensions::khr::Swapchain::new(&instance, &device);
+        let staging = Staging::new(&api)?;
 
         Ok(Self {
-            entry,
-            instance,
-            device,
-            physical_device: gpu,
-            pipeline_cache,
-            graphics_queue,
-            transfer_queue,
-            present_queue,
-            surface_khr,
-            swapchain_khr,
-            win32_surface_khr,
+            api,
             windows: RefCell::new(HandlePool::preallocate()),
             render_targets: RefCell::new(HandlePool::preallocate()),
             images: RefCell::new(HandlePool::preallocate_n(8)),
+            staging: RefCell::new(staging),
         })
-    }
-
-    pub(self) fn find_memory_type(
-        properties: &vk::PhysicalDeviceMemoryProperties,
-        type_bits: u32,
-        required_properties: vk::MemoryPropertyFlags,
-    ) -> Option<u32> {
-        (0..properties.memory_type_count).find(|&i| {
-            (type_bits & (1 << i)) != 0
-                && properties.memory_types[i as usize]
-                    .property_flags
-                    .contains(required_properties)
-        })
-    }
-
-    fn create_image_view(&self, image: vk::Image, format: vk::Format) -> VkResult<vk::ImageView> {
-        let create_info = vk::ImageViewCreateInfo {
-            flags: vk::ImageViewCreateFlags::empty(),
-            image,
-            view_type: vk::ImageViewType::TYPE_2D,
-            format,
-            components: vk::ComponentMapping::default(),
-            subresource_range: vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
-            ..Default::default()
-        };
-
-        unsafe { self.device.create_image_view(&create_info, None) }
-    }
-
-    pub fn create_semaphore(&self, timeline: bool) -> VkResult<vk::Semaphore> {
-        let timeline_info = vk::SemaphoreTypeCreateInfo {
-            semaphore_type: vk::SemaphoreType::TIMELINE,
-            initial_value: 0,
-            ..Default::default()
-        };
-
-        let create_info = vk::SemaphoreCreateInfo {
-            p_next: if timeline {
-                &timeline_info as *const vk::SemaphoreTypeCreateInfo as *const _
-            } else {
-                std::ptr::null()
-            },
-            ..Default::default()
-        };
-
-        unsafe { self.device.create_semaphore(&create_info, None) }
     }
 }
 
-impl Drop for Vulkan {
+impl Drop for VulkanGfxDevice {
     fn drop(&mut self) {
-        unsafe {
-            self.device
-                .destroy_pipeline_cache(self.pipeline_cache, None);
-            self.device.destroy_device(None);
-            self.instance.destroy_instance(None);
-        }
+        self.staging.borrow_mut().destroy(&self.api);
     }
 }
 
-impl GfxDevice for Vulkan {
+impl GfxDevice for VulkanGfxDevice {
     fn create_swapchain(
         &self,
         hwnd: windows::Win32::Foundation::HWND,
     ) -> Result<Handle<super::Swapchain>, Error> {
-        let window = Window::new(self, hwnd)?;
+        let window = Window::new(&self.api, hwnd)?;
         Ok(self.windows.borrow_mut().insert(window)?)
     }
 
@@ -299,16 +105,16 @@ impl GfxDevice for Vulkan {
     ) -> Result<(), Error> {
         let mut windows = self.windows.borrow_mut();
         let window = windows.get_mut(handle)?;
-        unsafe { self.device.device_wait_idle() }?;
-        window.resize(self, extent.into())?;
+        unsafe { self.api.device.device_wait_idle() }?;
+        window.resize(&self.api, extent.into())?;
         Ok(())
     }
 
     fn destroy_swapchain(&self, handle: Handle<super::Swapchain>) -> Result<(), Error> {
         let mut windows = self.windows.borrow_mut();
         let window = windows.remove(handle)?;
-        unsafe { self.device.device_wait_idle() }?;
-        window.destroy(self);
+        unsafe { self.api.device.device_wait_idle() }?;
+        window.destroy(&self.api);
         Ok(())
     }
 
@@ -318,7 +124,7 @@ impl GfxDevice for Vulkan {
     ) -> Result<Handle<super::RenderTarget>, Error> {
         let mut windows = self.windows.borrow_mut();
         let window = windows.get_mut(handle)?;
-        window.get_next_image(self)?;
+        window.get_next_image(&self.api)?;
 
         let mut render_targets = self.render_targets.borrow_mut();
         let handle = render_targets.insert(RenderTarget::Swapchain(handle, window.frame_id()))?;
@@ -329,7 +135,7 @@ impl GfxDevice for Vulkan {
         let mut windows = self.windows.borrow_mut();
         for handle in handles {
             let window = windows.get_mut(*handle)?;
-            match window.present(self) {
+            match window.present(&self.api) {
                 Ok(()) => Ok(()),
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Err(Error::SwapchainOutOfDate),
                 Err(e) => Err(Error::VulkanInternal { error_code: e }),
@@ -342,25 +148,28 @@ impl GfxDevice for Vulkan {
         Ok(self
             .images
             .borrow_mut()
-            .insert(Texture::new(self, extent)?)?)
+            .insert(Texture::new(&self.api, extent)?)?)
     }
 
-    fn upload_image(
+    fn copy_pixels(
         &self,
-        extent: Extent,
-        pixels: PixelBufferView,
-        resample_mode: Resample,
-    ) -> Result<Handle<super::Image>, Error> {
-        todo!()
+        src: PixelBufferView,
+        dst: Handle<super::Image>,
+        ops: &[ImageCopy],
+    ) -> Result<(), Error> {
+        let mut images = self.images.borrow_mut();
+        let image = images.get_mut(dst)?;
+        self.staging
+            .borrow_mut()
+            .copy_pixels(&self.api, src, image, ops)?;
+        Ok(())
     }
 
     fn copy_image(
         &self,
         src: Handle<super::Image>,
-        src_area: Rect,
         dst: Handle<super::Image>,
-        dst_area: Rect,
-        resample_mode: Resample,
+        ops: &[ImageCopy],
     ) -> Result<(), Error> {
         todo!()
     }
@@ -368,9 +177,9 @@ impl GfxDevice for Vulkan {
     fn destroy_image(&self, handle: Handle<super::Image>) -> Result<(), Error> {
         let mut images = self.images.borrow_mut();
         // If is_idle() returns an error, remove the texture anyway.
-        let texture = images.remove_if(handle, |t| t.is_idle(self).unwrap_or(true))?;
+        let texture = images.remove_if(handle, |t| t.is_idle(&self.api).unwrap_or(true))?;
         if let Some(texture) = texture {
-            texture.destroy(self);
+            texture.destroy(&self.api);
             Ok(())
         } else {
             Err(Error::ResourceInUse)
@@ -417,13 +226,13 @@ impl GfxDevice for Vulkan {
                         // acquired for the current frame.
                         let (frame, extent, sync, shader) = window.render_state();
 
-                        frame.reset(self)?;
+                        frame.reset(&self.api)?;
                         frame
                             .geometry
-                            .copy(self, &commands.vertices, &commands.indices)?;
+                            .copy(&self.api, &commands.vertices, &commands.indices)?;
 
                         let used_textures = shader.apply(
-                            self,
+                            &self.api,
                             commands,
                             frame.framebuffer,
                             extent,
@@ -439,17 +248,27 @@ impl GfxDevice for Vulkan {
                         for texture in used_textures {
                             let mut images = self.images.borrow_mut();
                             let texture = images.get_mut(texture).unwrap();
+                            texture.read_count += 1;
 
-                            // Make sure that the texture is not being written
-                            // to when we start using it (semaphore == count).
-                            wait_semaphores.push(texture.write_semaphore);
-                            wait_values.push(texture.write_count);
+                            if let Some(write_state) = &texture.write_state {
+                                if write_state.is_complete(&self.api)? {
+                                    // Return the completed write to the staging
+                                    // manager for reuse.
+                                    self.staging
+                                        .borrow_mut()
+                                        .finish(texture.write_state.take().unwrap());
+                                } else {
+                                    // Make sure that the texture is not being written
+                                    // to when we start using it (semaphore == count).
+                                    wait_semaphores.push(write_state.semaphore);
+                                    wait_values.push(write_state.counter);
+                                }
+                            }
 
                             // Increment the read semaphore when drawing is
                             // complete, and increment the check to match. Reads
                             // will be complete when semaphore == count.
                             signal_semaphores.push(texture.read_semaphore);
-                            texture.read_count += 1;
                             signal_values.push(texture.read_count);
                         }
 
@@ -462,8 +281,8 @@ impl GfxDevice for Vulkan {
                         };
 
                         unsafe {
-                            self.device.queue_submit(
-                                self.graphics_queue,
+                            self.api.device.queue_submit(
+                                self.api.graphics_queue,
                                 &[vk::SubmitInfo::builder()
                                     .push_next(&mut timeline_info)
                                     .command_buffers(&[frame.command_buffer])
@@ -490,7 +309,7 @@ impl GfxDevice for Vulkan {
     }
 
     fn flush(&self) {
-        unsafe { self.device.device_wait_idle() }.unwrap();
+        unsafe { self.api.device.device_wait_idle() }.unwrap();
     }
 }
 
@@ -539,75 +358,6 @@ fn has_names<T, F: Fn(&T) -> &[c_char]>(
     }
 
     Some(found_names)
-}
-
-/// Helper function for selecting a physical device. Moved out of
-/// `Vulkan::new()` due to its size.
-fn select_gpu(
-    instance: &ash::Instance,
-    can_present: impl Fn(vk::PhysicalDevice, u32) -> bool,
-) -> Result<(PhysicalDevice, SmallVec<[*const c_char; 8]>), Error> {
-    for gpu in unsafe { instance.enumerate_physical_devices() }? {
-        let (mut graphics, mut transfer, mut present) = (None, None, None);
-
-        let queue_families = unsafe { instance.get_physical_device_queue_family_properties(gpu) };
-        for (index, queue_family) in queue_families.iter().enumerate() {
-            let index = index.try_into().unwrap();
-
-            if can_present(gpu, index) {
-                present = present.or(Some(index));
-            }
-
-            if queue_family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                graphics = graphics.or(Some(index));
-            }
-
-            if queue_family.queue_flags.contains(vk::QueueFlags::TRANSFER)
-                && !queue_family.queue_flags.contains(vk::QueueFlags::GRAPHICS)
-            {
-                transfer = transfer.or(Some(index));
-            }
-        }
-
-        if let (Some(graphics), Some(present)) = (graphics, present) {
-            let extensions = has_names(
-                &unsafe { instance.enumerate_device_extension_properties(gpu) }?,
-                |e| &e.extension_name,
-                REQUIRED_DEVICE_EXTENSIONS,
-                OPTIONAL_DEVICE_EXTENSIONS,
-            );
-
-            if let Some(extensions) = extensions {
-                let properties = unsafe { instance.get_physical_device_properties(gpu) };
-                let memory_properties =
-                    unsafe { instance.get_physical_device_memory_properties(gpu) };
-
-                return Ok((
-                    PhysicalDevice {
-                        handle: gpu,
-                        properties,
-                        graphics_queue_family: graphics,
-                        transfer_queue_family: transfer.unwrap_or(graphics),
-                        present_queue_family: present,
-                        memory_properties,
-                    },
-                    extensions,
-                ));
-            }
-        }
-    }
-    Err(Error::NoGraphicsDevice)
-}
-
-/// Copied from unstable std while waiting for #![`feature(int_roundigs)`] to
-/// stabilize.
-///
-/// <https://github.com/rust-lang/rust/issues/88581>
-pub(self) const fn next_multiple_of(lhs: vk::DeviceSize, rhs: vk::DeviceSize) -> vk::DeviceSize {
-    match lhs % rhs {
-        0 => lhs,
-        r => lhs + (rhs - r),
-    }
 }
 
 impl From<crate::handle_pool::Error> for Error {

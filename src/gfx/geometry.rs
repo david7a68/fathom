@@ -305,6 +305,11 @@ impl Rect {
     }
 
     #[must_use]
+    pub fn height(&self) -> Px {
+        self.bottom - self.top
+    }
+
+    #[must_use]
     pub fn extent(&self) -> Extent {
         Extent {
             width: self.width(),

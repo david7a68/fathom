@@ -79,34 +79,90 @@ impl<'a> From<&'a PixelBuffer> for PixelBufferView<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct PixelBufferView<'a> {
     region: Rect,
     source: &'a PixelBuffer,
 }
 
 impl<'a> PixelBufferView<'a> {
-    pub fn write_bytes<W: std::io::Write>(&self, writer: &mut W) -> Result<(), std::io::Error> {
-        if self.region.extent() == self.source.extent {
-            writer.write_all(&self.source.bytes)?;
-        } else {
-            let pixel_size = self.source.layout.bytes_per_pixel();
-            let row_size = self.source.extent.width.0 as usize * pixel_size;
+    pub fn rect(&self) -> Rect {
+        self.region
+    }
 
-            let region_width = self.region.width().0 as usize * pixel_size;
+    #[must_use]
+    pub fn layout(&self) -> Layout {
+        self.source.layout
+    }
 
-            let start =
-                row_size * self.region.top.0 as usize + self.region.left.0 as usize * pixel_size;
-            let end = row_size * self.region.bottom.0 as usize
-                + self.region.right.0 as usize * pixel_size;
+    #[must_use]
+    pub fn color_space(&self) -> ColorSpace {
+        self.source.color_space
+    }
 
-            let mut row_offset = start;
-
-            while row_offset < end {
-                writer.write_all(&self.source.bytes[row_offset..row_offset + region_width])?;
-                row_offset += row_size;
-            }
+    #[must_use]
+    pub fn subrect(&self, rect: Rect) -> Self {
+        Self {
+            region: Rect {
+                top: (self.region.top + rect.top).min(self.region.bottom),
+                bottom: (self.region.top + rect.bottom).min(self.region.bottom),
+                left: (self.region.left + rect.left).min(self.region.right),
+                right: (self.region.left + rect.right).min(self.region.right),
+            },
+            source: self.source,
         }
+    }
 
-        Ok(())
+    pub fn bytes(&self) -> Bytes {
+        Bytes::new(self)
+    }
+}
+
+pub struct Bytes<'a> {
+    pixels: &'a PixelBuffer,
+    /// The cursor tracking the iterator's current position in the buffer.
+    cursor: usize,
+    /// One past the last byte in the span, used as a sentinel.
+    last_byte: usize,
+    /// The number of bytes to return in a span.
+    span_width: usize,
+    /// The distance from the start of one span to the start of the next.
+    span_offset: usize,
+}
+
+impl<'a> Bytes<'a> {
+    fn new(view: &PixelBufferView<'a>) -> Self {
+        let cursor = (view.region.left.0 as usize
+            + view.region.top.0 as usize * view.region.width().0 as usize)
+            * view.layout().bytes_per_pixel();
+
+        let last_byte = (view.region.right.0 as usize
+            + view.region.bottom.0 as usize * view.region.width().0 as usize)
+            * view.layout().bytes_per_pixel();
+
+        let span_width = view.region.width().0 as usize * view.layout().bytes_per_pixel();
+        let span_offset = view.source.extent.width.0 as usize * view.layout().bytes_per_pixel();
+
+        Self {
+            pixels: view.source,
+            cursor,
+            last_byte,
+            span_width,
+            span_offset
+        }
+    }
+}
+
+impl<'a> Iterator for Bytes<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cursor < self.last_byte {
+            let bytes = &self.pixels.bytes[self.cursor..self.cursor + self.span_width];
+            self.cursor += self.span_offset;
+            Some(bytes)
+        } else {
+            None
+        }
     }
 }

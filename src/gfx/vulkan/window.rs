@@ -1,8 +1,9 @@
 use ash::vk;
 
 use super::{
+    api::{VkResult, Vulkan},
     ui_shader::{UiGeometryBuffer, UiShader},
-    VkResult, Vulkan, FRAMES_IN_FLIGHT, PREFERRED_SWAPCHAIN_LENGTH,
+    FRAMES_IN_FLIGHT, PREFERRED_SWAPCHAIN_LENGTH,
 };
 
 /// Utility struct that holds members relating to a specific window. Swapchain
@@ -245,22 +246,7 @@ fn regenerate_frames(
             unsafe { api.device.create_command_pool(&create_info, None) }?
         };
 
-        let command_buffer = {
-            let create_info = vk::CommandBufferAllocateInfo::builder()
-                .command_pool(command_pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1);
-            let mut command_buffer = vk::CommandBuffer::null();
-            unsafe {
-                (api.device.fp_v1_0().allocate_command_buffers)(
-                    api.device.handle(),
-                    &create_info.build(),
-                    &mut command_buffer,
-                )
-            }
-            .result()?;
-            command_buffer
-        };
+        let command_buffer = api.allocate_command_buffer(command_pool)?;
 
         let geometry = UiGeometryBuffer::new(api)?;
 
