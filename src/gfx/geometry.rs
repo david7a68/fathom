@@ -31,6 +31,13 @@ impl TryFrom<i32> for Px {
     }
 }
 
+impl TryFrom<u32> for Px {
+    type Error = <i16 as TryFrom<u32>>::Error;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        i16::try_from(value).map(Px)
+    }
+}
+
 impl std::ops::Add for Px {
     type Output = Self;
     fn add(self, other: Self) -> Self {
@@ -95,6 +102,10 @@ impl std::cmp::PartialOrd<i32> for Px {
     fn partial_cmp(&self, other: &i32) -> Option<std::cmp::Ordering> {
         (i32::from(self.0)).partial_cmp(other)
     }
+}
+
+impl Px {
+    pub const MAX: Self = Px(i16::MAX);
 }
 
 /// A 2D point in space. It may be negative (to the left or above the top-left

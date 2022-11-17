@@ -1,4 +1,4 @@
-use super::geometry::{Extent, Offset, Point, Rect};
+use super::geometry::{Extent, Point, Rect};
 
 #[derive(Clone, Copy, Debug)]
 #[repr(u8)]
@@ -47,6 +47,12 @@ impl PixelBuffer {
             bytes,
             extent,
         }
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, crate::io::image::Error> {
+        use crate::io::image;
+
+        image::decode_png(bytes)
     }
 
     #[must_use]
