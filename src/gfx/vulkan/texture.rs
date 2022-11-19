@@ -391,6 +391,7 @@ impl Staging {
                 .destroy_descriptor_set_layout(self.descriptor_layout, None);
             api.device.destroy_buffer(self.extent_buffer, None);
             api.device.free_memory(self.extent_memory, None);
+            api.device.destroy_command_pool(self.command_pool, None);
             self.io_pool.clear();
         }
     }
@@ -447,8 +448,8 @@ impl Staging {
             api.device.unmap_memory(memory);
         }
 
-        let mut io_state = self.io_pool.pop().expect("out of descriptors!");
-        io_state.descriptors.reserve(ops.len());
+        let mut write_state = self.alloc_write_state(api)?;
+        write_state.descriptors.reserve(ops.len());
 
         assert!(
             self.descriptors.len() >= ops.len(),
@@ -457,7 +458,7 @@ impl Staging {
 
         unsafe {
             api.device.begin_command_buffer(
-                io_state.command_buffer,
+                write_state.command_buffer,
                 &vk::CommandBufferBeginInfo {
                     flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
                     ..Default::default()
@@ -470,13 +471,13 @@ impl Staging {
             };
 
             api.device.cmd_bind_pipeline(
-                io_state.command_buffer,
+                write_state.command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
                 pipeline,
             );
 
             api.device.cmd_pipeline_barrier(
-                io_state.command_buffer,
+                write_state.command_buffer,
                 vk::PipelineStageFlags::TOP_OF_PIPE,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::DependencyFlags::BY_REGION,
@@ -581,7 +582,7 @@ impl Staging {
                 );
 
                 api.device.cmd_bind_descriptor_sets(
-                    io_state.command_buffer,
+                    write_state.command_buffer,
                     vk::PipelineBindPoint::COMPUTE,
                     self.rgb_pipeline_layout,
                     0,
@@ -598,13 +599,13 @@ impl Staging {
                     (op.src_rect.height().0 as u32 / 32) + u32::from(op.src_rect.height() % 32 > 0);
 
                 api.device
-                    .cmd_dispatch(io_state.command_buffer, work_group_x, work_group_y, 1);
+                    .cmd_dispatch(write_state.command_buffer, work_group_x, work_group_y, 1);
 
-                io_state.descriptors.push(descriptor);
+                write_state.descriptors.push(descriptor);
             }
 
             api.device.cmd_pipeline_barrier(
-                io_state.command_buffer,
+                write_state.command_buffer,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                 vk::DependencyFlags::BY_REGION,
@@ -629,7 +630,7 @@ impl Staging {
                 }],
             );
 
-            api.device.end_command_buffer(io_state.command_buffer)?;
+            api.device.end_command_buffer(write_state.command_buffer)?;
         }
 
         let mut wait_values = ArrayVec::<_, 2>::new();
@@ -645,12 +646,12 @@ impl Staging {
             wait_semaphores.push(write.semaphore);
         }
 
-        io_state.counter += 1;
+        write_state.counter += 1;
         let timeline_info = vk::TimelineSemaphoreSubmitInfo {
             wait_semaphore_value_count: wait_values.len() as u32,
             p_wait_semaphore_values: wait_values.as_ptr(),
             signal_semaphore_value_count: 1,
-            p_signal_semaphore_values: &io_state.counter,
+            p_signal_semaphore_values: &write_state.counter,
             ..Default::default()
         };
 
@@ -658,15 +659,15 @@ impl Staging {
             p_next: &timeline_info as *const _ as *const _,
             wait_semaphore_count: wait_values.len() as u32,
             p_wait_semaphores: wait_semaphores.as_ptr(),
-            p_signal_semaphores: &io_state.semaphore,
+            p_signal_semaphores: &write_state.semaphore,
             p_wait_dst_stage_mask: &vk::PipelineStageFlags::COMPUTE_SHADER,
             command_buffer_count: 1,
-            p_command_buffers: &io_state.command_buffer,
+            p_command_buffers: &write_state.command_buffer,
             ..Default::default()
         };
 
         dst.image_layout = vk::ImageLayout::READ_ONLY_OPTIMAL;
-        dst.write_state = Some(io_state);
+        dst.write_state = Some(write_state);
 
         unsafe {
             api.device
