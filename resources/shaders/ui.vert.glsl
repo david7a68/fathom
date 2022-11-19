@@ -2,8 +2,9 @@
 
 layout(location = 0) in ivec2 position;
 layout(location = 1) in vec4 color;
+layout(location = 2) in ivec2 uv;
 
-layout(push_constant) uniform PushConstants {
+layout(push_constant) uniform VertConstants {
     vec2 scale;
     vec2 translate;
 };

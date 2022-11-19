@@ -12,7 +12,7 @@ pub mod pixel_buffer;
 mod vulkan;
 
 pub const MAX_SWAPCHAINS: u32 = 32;
-pub const MAX_IMAGES: u32 = 64;
+pub const MAX_IMAGES: u32 = 128;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -55,7 +55,7 @@ pub struct Image {}
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(self) struct Vertex {
-    // 32 bytes
+    pub uv: Point,
     pub point: Point,
     pub color: Color,
 }
@@ -84,11 +84,9 @@ enum Command {
         first_index: u16,
         num_indices: u16,
     },
-    Texture {
-        texture: Handle<Image>,
+    Image {
+        image: Handle<Image>,
         first_index: u16,
-        first_uv: u16,
-        num_vertices: u16,
         num_indices: u16,
     },
 }
@@ -172,18 +170,22 @@ impl DrawCommandList {
         let vertex_offset = self.vertices.len() as u16;
         self.vertices.extend_from_slice(&[
             Vertex {
+                uv: Point::zero(),
                 point: rect.top_left(),
                 color,
             },
             Vertex {
+                uv: Point::zero(),
                 point: rect.top_right(),
                 color,
             },
             Vertex {
+                uv: Point::zero(),
                 point: rect.bottom_right(),
                 color,
             },
             Vertex {
+                uv: Point::zero(),
                 point: rect.bottom_left(),
                 color,
             },

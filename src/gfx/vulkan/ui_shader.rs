@@ -22,33 +22,41 @@ pub const BINDING_DESCRIPTION: vk::VertexInputBindingDescription =
         input_rate: vk::VertexInputRate::VERTEX,
     };
 
-pub const ATTRIBUTE_DESCRIPTIONS: [vk::VertexInputAttributeDescription; 2] = [
+pub const ATTRIBUTE_DESCRIPTIONS: [vk::VertexInputAttributeDescription; 3] = [
     // ivec2 position
     vk::VertexInputAttributeDescription {
         location: 0,
         binding: 0,
         format: vk::Format::R16G16_SINT,
-        offset: 0,
+        offset: std::mem::size_of::<Point>() as u32,
     },
     // vec4 color
     vk::VertexInputAttributeDescription {
         location: 1,
         binding: 0,
         format: vk::Format::R32G32B32A32_SFLOAT,
-        offset: std::mem::size_of::<Point>() as u32,
+        offset: std::mem::size_of::<Point>() as u32 * 2,
+    },
+    // ivec2 uv
+    vk::VertexInputAttributeDescription {
+        location: 2,
+        binding: 0,
+        format: vk::Format::R16G16_SINT,
+        offset: 0,
     },
 ];
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct PushConstants {
+struct VertexPushConstants {
     scale: [f32; 2],
     translate: [f32; 2],
 }
 
-union PushConstantBytes {
-    constants: PushConstants,
-    bytes: [u8; std::mem::size_of::<PushConstants>()],
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FragmentPushConstants {
+    use_texture: vk::Bool32,
 }
 
 /// Utility struct for holding a pipeline and render pass.
@@ -62,15 +70,26 @@ impl UiShader {
     #[allow(clippy::too_many_lines)]
     pub fn new(api: &Vulkan, format: vk::Format) -> Result<Self, vk::Result> {
         let layout = {
-            let push_constant_range = [vk::PushConstantRange::builder()
-                .offset(0)
-                .size(
-                    std::mem::size_of::<PushConstants>()
-                        .try_into()
-                        .expect("push constants exceed 2^32 bytes; what happened?"),
-                )
-                .stage_flags(vk::ShaderStageFlags::VERTEX)
-                .build()];
+            let push_constant_range = [
+                vk::PushConstantRange::builder()
+                    .offset(0)
+                    .size(
+                        std::mem::size_of::<VertexPushConstants>()
+                            .try_into()
+                            .expect("push constants exceed 2^32 bytes; what happened?"),
+                    )
+                    .stage_flags(vk::ShaderStageFlags::VERTEX)
+                    .build(),
+                vk::PushConstantRange::builder()
+                    .offset(std::mem::size_of::<VertexPushConstants>() as u32)
+                    .size(
+                        std::mem::size_of::<FragmentPushConstants>()
+                            .try_into()
+                            .expect("push constants exceed 2^32 bytes; what happened?"),
+                    )
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+                    .build(),
+            ];
 
             let pipeline_layout_ci =
                 vk::PipelineLayoutCreateInfo::builder().push_constant_ranges(&push_constant_range);
@@ -249,25 +268,14 @@ impl UiShader {
         }
     }
 
-    /// Writes everything that is needed to draw the commands to the command buffer,
-    /// including `vkBeginCommandbuffer` and `vkEndCommandBuffer`. It returns a list
-    /// of all the unique images that were in the command stream.
-    pub fn apply(
+    pub fn begin(
         &self,
         api: &Vulkan,
-        commands: &DrawCommandList,
         target: vk::Framebuffer,
         viewport: vk::Extent2D,
-        geometry: &UiGeometryBuffer,
         command_buffer: vk::CommandBuffer,
-    ) -> Result<SmallVec<[Handle<gfx::Image>; MAX_IMAGES as usize]>, vk::Result> {
+    ) {
         unsafe {
-            api.device.begin_command_buffer(
-                command_buffer,
-                &vk::CommandBufferBeginInfo::builder()
-                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-            )?;
-
             api.device.cmd_begin_render_pass(
                 command_buffer,
                 &vk::RenderPassBeginInfo::builder()
@@ -306,80 +314,155 @@ impl UiShader {
                     extent: viewport,
                 }],
             );
+        }
+    }
 
-            let push_constants = PushConstantBytes {
-                constants: PushConstants {
-                    scale: [2.0 / viewport.width as f32, 2.0 / viewport.height as f32],
-                    translate: [-1.0, -1.0],
-                },
-            };
+    pub fn end(&self, api: &Vulkan, command_buffer: vk::CommandBuffer) {
+        unsafe { api.device.cmd_end_render_pass(command_buffer) };
+    }
+
+    pub fn draw_indexed(
+        &self,
+        api: &Vulkan,
+        first_index: u16,
+        num_indices: u16,
+        viewport: vk::Extent2D,
+        geometry: &UiGeometryBuffer,
+        command_buffer: vk::CommandBuffer,
+    ) {
+        unsafe {
+            api.device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline,
+            );
+
+            api.device
+                .cmd_bind_vertex_buffers(command_buffer, 0, &[geometry.handle], &[0]);
+
+            api.device.cmd_bind_index_buffer(
+                command_buffer,
+                geometry.handle,
+                geometry.index_offset,
+                vk::IndexType::UINT16,
+            );
 
             api.device.cmd_push_constants(
                 command_buffer,
                 self.layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
-                &push_constants.bytes,
+                &std::mem::transmute::<_, [u8; std::mem::size_of::<VertexPushConstants>()]>(
+                    VertexPushConstants {
+                        scale: [2.0 / viewport.width as f32, 2.0 / viewport.height as f32],
+                        translate: [-1.0, -1.0],
+                    },
+                ),
+            );
+
+            api.device.cmd_push_constants(
+                command_buffer,
+                self.layout,
+                vk::ShaderStageFlags::FRAGMENT,
+                std::mem::size_of::<VertexPushConstants>() as u32,
+                &std::mem::transmute::<_, [u8; 4]>(FragmentPushConstants {
+                    use_texture: vk::FALSE,
+                }),
+            );
+
+            api.device.cmd_draw_indexed(
+                command_buffer,
+                u32::from(num_indices),
+                1,
+                u32::from(first_index),
+                0,
+                0,
             );
         }
+    }
 
-        let mut textures = SmallVec::<[Handle<gfx::Image>; MAX_IMAGES as usize]>::new();
-        for command in commands.commands.iter().chain(commands.current.as_ref()) {
-            match command {
-                Command::Scissor { rect } => unsafe {
-                    api.device
-                        .cmd_set_scissor(command_buffer, 0, &[vk::Rect2D::from(*rect)]);
-                },
-                Command::Polygon {
-                    first_index,
-                    num_indices,
-                } => unsafe {
-                    api.device.cmd_bind_pipeline(
-                        command_buffer,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        self.pipeline,
-                    );
-
-                    api.device
-                        .cmd_bind_vertex_buffers(command_buffer, 0, &[geometry.handle], &[0]);
-
-                    api.device.cmd_bind_index_buffer(
-                        command_buffer,
-                        geometry.handle,
-                        geometry.index_offset,
-                        vk::IndexType::UINT16,
-                    );
-
-                    api.device.cmd_draw_indexed(
-                        command_buffer,
-                        u32::from(*num_indices),
-                        1,
-                        u32::from(*first_index),
-                        0,
-                        0,
-                    );
-                },
-                Command::Texture {
-                    texture,
-                    first_index,
-                    first_uv,
-                    num_vertices,
-                    num_indices,
-                } => {
-                    textures.push(*texture);
-                    todo!()
-                }
-            }
-        }
-
+    pub fn draw_textured(
+        &self,
+        api: &Vulkan,
+        first_index: u16,
+        num_indices: u16,
+        viewport: vk::Extent2D,
+        texture: &vk::DescriptorImageInfo,
+        descriptor: vk::DescriptorSet,
+        geometry: &UiGeometryBuffer,
+        command_buffer: vk::CommandBuffer,
+    ) {
         unsafe {
-            api.device.cmd_end_render_pass(command_buffer);
-            api.device.end_command_buffer(command_buffer)?;
-        }
+            api.device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline,
+            );
 
-        textures.sort_unstable();
-        textures.dedup();
-        Ok(textures)
+            api.device
+                .cmd_bind_vertex_buffers(command_buffer, 0, &[geometry.handle], &[0]);
+
+            api.device.cmd_bind_index_buffer(
+                command_buffer,
+                geometry.handle,
+                geometry.index_offset,
+                vk::IndexType::UINT16,
+            );
+
+            api.device.cmd_push_constants(
+                command_buffer,
+                self.layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                &std::mem::transmute::<_, [u8; std::mem::size_of::<VertexPushConstants>()]>(
+                    VertexPushConstants {
+                        scale: [2.0 / viewport.width as f32, 2.0 / viewport.height as f32],
+                        translate: [-1.0, -1.0],
+                    },
+                ),
+            );
+
+            api.device.update_descriptor_sets(
+                &[vk::WriteDescriptorSet {
+                    dst_set: descriptor,
+                    dst_binding: 0,
+                    dst_array_element: 0,
+                    descriptor_count: 1,
+                    descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                    p_image_info: texture,
+                    ..Default::default()
+                }],
+                &[],
+            );
+
+            api.device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.layout,
+                0,
+                &[descriptor],
+                &[0],
+            );
+
+            api.device.cmd_push_constants(
+                command_buffer,
+                self.layout,
+                vk::ShaderStageFlags::FRAGMENT,
+                std::mem::size_of::<VertexPushConstants>() as u32,
+                &std::mem::transmute::<_, [u8; 4]>(FragmentPushConstants {
+                    use_texture: vk::TRUE,
+                }),
+            );
+
+            api.device.cmd_draw_indexed(
+                command_buffer,
+                u32::from(num_indices),
+                1,
+                u32::from(first_index),
+                0,
+                0,
+            );
+        }
     }
 
     pub fn create_framebuffer(

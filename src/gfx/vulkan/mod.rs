@@ -5,6 +5,7 @@ mod window;
 
 use std::{cell::RefCell, ffi::c_char};
 
+use arrayvec::ArrayVec;
 use ash::vk;
 use smallvec::SmallVec;
 
@@ -46,8 +47,15 @@ const OPTIONAL_DEVICE_EXTENSIONS: &[&[c_char]] = &[];
 const FRAMES_IN_FLIGHT: usize = 2;
 const PREFERRED_SWAPCHAIN_LENGTH: u32 = 2;
 
+const MAX_TEXTURE_DESCRIPTORS: u32 = 1024;
+
 pub struct VulkanGfxDevice {
     api: Vulkan,
+
+    sampler: vk::Sampler,
+    descriptor_sets: RefCell<ArrayVec<vk::DescriptorSet, { MAX_TEXTURE_DESCRIPTORS as usize }>>,
+    descriptor_pool: vk::DescriptorPool,
+    descriptor_layout: vk::DescriptorSetLayout,
 
     windows: RefCell<HandlePool<Window, super::Swapchain, MAX_SWAPCHAINS>>,
     render_targets: RefCell<HandlePool<RenderTarget, super::RenderTarget, 128>>,
@@ -71,10 +79,94 @@ impl VulkanGfxDevice {
             OPTIONAL_DEVICE_EXTENSIONS,
         )?;
 
+        let sampler = {
+            let create_info = vk::SamplerCreateInfo {
+                mag_filter: vk::Filter::LINEAR,
+                min_filter: vk::Filter::LINEAR,
+                mipmap_mode: vk::SamplerMipmapMode::NEAREST,
+                address_mode_u: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+                address_mode_v: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+                address_mode_w: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+                mip_lod_bias: 0.0,
+                anisotropy_enable: vk::FALSE,
+                max_anisotropy: 0.0,
+                compare_enable: vk::FALSE,
+                compare_op: vk::CompareOp::NEVER,
+                min_lod: 0.0,
+                max_lod: 0.0,
+                border_color: vk::BorderColor::INT_OPAQUE_BLACK,
+                unnormalized_coordinates: vk::TRUE,
+                ..Default::default()
+            };
+
+            unsafe { api.device.create_sampler(&create_info, None) }?
+        };
+
+        let descriptor_layout = {
+            let bindings = [vk::DescriptorSetLayoutBinding {
+                binding: 0,
+                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                descriptor_count: 1,
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                ..Default::default()
+            }];
+
+            let create_info = vk::DescriptorSetLayoutCreateInfo {
+                binding_count: bindings.len() as u32,
+                p_bindings: bindings.as_ptr(),
+                ..Default::default()
+            };
+
+            unsafe { api.device.create_descriptor_set_layout(&create_info, None) }?
+        };
+
+        let descriptor_pool = {
+            let pool_size = [vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLED_IMAGE,
+                descriptor_count: MAX_TEXTURE_DESCRIPTORS,
+            }];
+
+            let create_info = vk::DescriptorPoolCreateInfo {
+                flags: vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND,
+                max_sets: MAX_TEXTURE_DESCRIPTORS,
+                pool_size_count: pool_size.len() as u32,
+                p_pool_sizes: pool_size.as_ptr(),
+                ..Default::default()
+            };
+
+            unsafe { api.device.create_descriptor_pool(&create_info, None) }?
+        };
+
+        let descriptor_sets = {
+            let layouts = [descriptor_layout; MAX_TEXTURE_DESCRIPTORS as usize];
+            let create_info = vk::DescriptorSetAllocateInfo {
+                descriptor_pool,
+                descriptor_set_count: MAX_TEXTURE_DESCRIPTORS,
+                p_set_layouts: layouts.as_ptr(),
+                ..Default::default()
+            };
+
+            let mut sets = ArrayVec::new();
+            unsafe {
+                (api.device.fp_v1_0().allocate_descriptor_sets)(
+                    api.device.handle(),
+                    &create_info,
+                    sets.as_mut_ptr(),
+                )
+                .result()?;
+                sets.set_len(MAX_TEXTURE_DESCRIPTORS as usize);
+            }
+            sets
+        };
+
         let staging = Staging::new(&api)?;
 
         Ok(Self {
             api,
+            sampler,
+            descriptor_sets: RefCell::new(descriptor_sets),
+            descriptor_pool,
+            descriptor_layout,
             windows: RefCell::new(HandlePool::preallocate()),
             render_targets: RefCell::new(HandlePool::preallocate()),
             images: RefCell::new(HandlePool::preallocate_n(8)),
@@ -245,25 +337,93 @@ impl GfxDevice for VulkanGfxDevice {
         };
 
         frame.reset(&self.api)?;
+        self.descriptor_sets
+            .borrow_mut()
+            .extend(frame.descriptors.drain(..));
         frame
             .geometry
             .copy(&self.api, &commands.vertices, &commands.indices)?;
 
-        let used_textures = shader.apply(
-            &self.api,
-            commands,
-            frame.framebuffer,
-            extent,
-            &frame.geometry,
-            frame.command_buffer,
-        )?;
+        unsafe {
+            self.api.device.begin_command_buffer(
+                frame.command_buffer,
+                &vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+        }?;
 
+        shader.begin(&self.api, frame.framebuffer, extent, frame.command_buffer);
+
+        let mut used_textures = SmallVec::<[Handle<super::Image>; 32]>::new();
+        for command in commands.commands.iter().chain(commands.current.as_ref()) {
+            match command {
+                super::Command::Scissor { rect } => unsafe {
+                    self.api.device.cmd_set_scissor(
+                        frame.command_buffer,
+                        0,
+                        &[vk::Rect2D::from(*rect)],
+                    )
+                },
+                super::Command::Polygon {
+                    first_index,
+                    num_indices,
+                } => shader.draw_indexed(
+                    &self.api,
+                    *first_index,
+                    *num_indices,
+                    extent,
+                    &frame.geometry,
+                    frame.command_buffer,
+                ),
+                super::Command::Image {
+                    image,
+                    first_index,
+                    num_indices,
+                } => {
+                    let textures = self.images.borrow_mut();
+                    // todo: cleanup if fails
+                    let texture = textures.get(*image).unwrap();
+
+                    debug_assert_eq!(texture.image_layout, vk::ImageLayout::READ_ONLY_OPTIMAL);
+                    let texture_info = vk::DescriptorImageInfo {
+                        sampler: self.sampler,
+                        image_view: texture.image_view,
+                        image_layout: vk::ImageLayout::READ_ONLY_OPTIMAL,
+                    };
+
+                    let descriptor = self.descriptor_sets.borrow_mut().pop().unwrap();
+                    frame.descriptors.push(descriptor);
+
+                    shader.draw_textured(
+                        &self.api,
+                        *first_index,
+                        *num_indices,
+                        extent,
+                        &texture_info,
+                        descriptor,
+                        &frame.geometry,
+                        frame.command_buffer,
+                    );
+
+                    used_textures.push(*image);
+                    todo!()
+                }
+            }
+        }
+
+        shader.end(&self.api, frame.command_buffer);
+        // todo cleanup on error
+        unsafe { self.api.device.end_command_buffer(frame.command_buffer) }.unwrap();
+
+        used_textures.sort();
+        used_textures.dedup();
         for texture in used_textures {
             let mut images = self.images.borrow_mut();
             let texture = images.get_mut(texture).unwrap();
             texture.read_count += 1;
 
             if let Some(write_state) = &texture.write_state {
+                // todo: what to do on failure
                 if write_state.is_complete(&self.api)? {
                     // Return the completed write to the staging
                     // manager for reuse.

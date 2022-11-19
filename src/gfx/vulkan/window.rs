@@ -173,6 +173,8 @@ pub struct Frame {
     pub command_buffer: vk::CommandBuffer,
 
     pub geometry: UiGeometryBuffer,
+    // todo: smallvec?
+    pub descriptors: Vec<vk::DescriptorSet>,
 
     /// The fence is used to determine when the GPU is done rendering this
     /// frame. Once rendering is done, the command pool can be reset, and the
@@ -262,6 +264,7 @@ fn regenerate_frames(
             command_pool,
             command_buffer,
             geometry,
+            descriptors: Vec::new(),
             fence,
         });
     }

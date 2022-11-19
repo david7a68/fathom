@@ -28,7 +28,7 @@ use smallvec::SmallVec;
 
 use crate::gfx::{
     geometry::{Extent, Offset},
-    pixel_buffer::{Layout, PixelBufferView},
+    pixel_buffer::{Layout, PixelBufferView}, MAX_IMAGES,
 };
 
 use super::{
@@ -40,8 +40,8 @@ const STORAGE_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
 pub struct Texture {
     image: vk::Image,
-    image_view: vk::ImageView,
-    image_layout: vk::ImageLayout,
+    pub image_view: vk::ImageView,
+    pub image_layout: vk::ImageLayout,
     memory: vk::DeviceMemory,
     /// A timeline semaphore used to track read operations. If
     /// `read_semaphore==read_count`, the texture is not currently being read
@@ -213,7 +213,7 @@ pub struct Staging {
 }
 
 impl Staging {
-    const MAX_CONCURRENT_IO: u32 = 128;
+    const MAX_CONCURRENT_IO: u32 = MAX_IMAGES;
     const MAX_DESCRIPTORS: u32 = Self::MAX_CONCURRENT_IO * 4;
 
     const RGB_UINT_SHADER: &[u8] =
