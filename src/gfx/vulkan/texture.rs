@@ -331,9 +331,6 @@ impl Staging {
         )?;
 
         let extent_memory_ptr = unsafe {
-            api.device
-                .bind_buffer_memory(extent_buffer, extent_memory, 0)?;
-
             api.device.map_memory(
                 extent_memory,
                 0,
@@ -693,11 +690,17 @@ impl Staging {
             unsafe { api.device.create_pipeline_layout(&create_info, None) }?
         };
 
-        let shader = vk::ShaderModuleCreateInfo {
-            code_size: Self::RGB_UINT_SHADER.len(),
-            p_code: Self::RGB_UINT_SHADER.as_ptr().cast(),
-            ..Default::default()
-        };
+        assert_eq!(Self::RGB_UINT_SHADER.len() % 4, 0);
+        let shader = unsafe {
+            api.device.create_shader_module(
+                &vk::ShaderModuleCreateInfo {
+                    code_size: Self::RGB_UINT_SHADER.len(),
+                    p_code: Self::RGB_UINT_SHADER.as_ptr().cast(),
+                    ..Default::default()
+                },
+                None,
+            )
+        }?;
 
         let specialization_constants: [u32; 2] = [
             3,   // num_channels
@@ -725,9 +728,8 @@ impl Staging {
         };
 
         let stage = vk::PipelineShaderStageCreateInfo {
-            p_next: &shader as *const _ as *const _,
             stage: vk::ShaderStageFlags::COMPUTE,
-            module: vk::ShaderModule::null(),
+            module: shader,
             p_name: as_cchar_slice(b"main\0").as_ptr(),
             p_specialization_info: &specialization,
             ..Default::default()
@@ -751,6 +753,8 @@ impl Staging {
             )
         }
         .result()?;
+
+        unsafe { api.device.destroy_shader_module(shader, None) };
 
         Ok((pipeline, layout))
     }

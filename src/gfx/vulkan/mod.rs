@@ -210,102 +210,104 @@ impl GfxDevice for VulkanGfxDevice {
         handle: Handle<super::RenderTarget>,
         commands: &DrawCommandList,
     ) -> Result<(), Error> {
+        let mut wait_values = SmallVec::<[_; MAX_IMAGES as usize]>::new();
+        let mut wait_semaphores = SmallVec::<[_; MAX_IMAGES as usize]>::new();
+        let mut signal_values = SmallVec::<[_; MAX_IMAGES as usize]>::new();
+        let mut signal_semaphores = SmallVec::<[_; MAX_IMAGES as usize]>::new();
+
         let mut targets = self.render_targets.borrow_mut();
-        let render_target = targets.get(handle)?;
-
-        match render_target {
+        let mut windows = self.windows.borrow_mut();
+        let (frame, extent, shader) = match targets.get(handle)? {
             RenderTarget::Swapchain(window_handle, frame_id) => {
-                let mut windows = self.windows.borrow_mut();
-
-                // Check if the window still exists.
                 if let Ok(window) = windows.get_mut(*window_handle) {
-                    // Check if the render target is pointing to the current image
                     if *frame_id == window.frame_id() {
-                        // The only way to get a swapchain image is to get a
-                        // handle to it, and we've checked that the handle was
-                        // acquired for the current frame.
                         let (frame, extent, sync, shader) = window.render_state();
 
-                        frame.reset(&self.api)?;
-                        frame
-                            .geometry
-                            .copy(&self.api, &commands.vertices, &commands.indices)?;
+                        // Vulkan Spec requires that wait_values.len() == wait_semaphores.len().
+                        wait_values.push(0);
+                        wait_semaphores.push(sync.acquire_semaphore);
+                        // ditto
+                        signal_values.push(0);
+                        signal_semaphores.push(sync.present_semaphore);
 
-                        let used_textures = shader.apply(
-                            &self.api,
-                            commands,
-                            frame.framebuffer,
-                            extent,
-                            &frame.geometry,
-                            frame.command_buffer,
-                        )?;
-
-                        let mut wait_values = SmallVec::<[_; MAX_IMAGES as usize]>::new();
-                        let mut wait_semaphores = SmallVec::<[_; MAX_IMAGES as usize]>::new();
-                        let mut signal_values = SmallVec::<[_; MAX_IMAGES as usize]>::new();
-                        let mut signal_semaphores = SmallVec::<[_; MAX_IMAGES as usize]>::new();
-
-                        for texture in used_textures {
-                            let mut images = self.images.borrow_mut();
-                            let texture = images.get_mut(texture).unwrap();
-                            texture.read_count += 1;
-
-                            if let Some(write_state) = &texture.write_state {
-                                if write_state.is_complete(&self.api)? {
-                                    // Return the completed write to the staging
-                                    // manager for reuse.
-                                    self.staging
-                                        .borrow_mut()
-                                        .finish(texture.write_state.take().unwrap());
-                                } else {
-                                    // Make sure that the texture is not being written
-                                    // to when we start using it (semaphore == count).
-                                    wait_semaphores.push(write_state.semaphore);
-                                    wait_values.push(write_state.counter);
-                                }
-                            }
-
-                            // Increment the read semaphore when drawing is
-                            // complete, and increment the check to match. Reads
-                            // will be complete when semaphore == count.
-                            signal_semaphores.push(texture.read_semaphore);
-                            signal_values.push(texture.read_count);
-                        }
-
-                        let mut timeline_info = vk::TimelineSemaphoreSubmitInfo {
-                            wait_semaphore_value_count: wait_semaphores.len() as u32,
-                            p_wait_semaphore_values: wait_values.as_ptr(),
-                            signal_semaphore_value_count: signal_semaphores.len() as u32,
-                            p_signal_semaphore_values: signal_values.as_ptr(),
-                            ..Default::default()
-                        };
-
-                        unsafe {
-                            self.api.device.queue_submit(
-                                self.api.graphics_queue,
-                                &[vk::SubmitInfo::builder()
-                                    .push_next(&mut timeline_info)
-                                    .command_buffers(&[frame.command_buffer])
-                                    .wait_semaphores(&[sync.acquire_semaphore])
-                                    .signal_semaphores(&[sync.present_semaphore])
-                                    .wait_dst_stage_mask(&[
-                                        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                                    ])
-                                    .build()],
-                                frame.fence,
-                            )
-                        }?;
-
-                        return Ok(());
+                        (frame, extent, shader)
+                    } else {
+                        targets.remove(handle).unwrap();
+                        Err(Error::InvalidHandle)?
                     }
+                } else {
+                    targets.remove(handle).unwrap();
+                    // May be more accurate to have a RenderTargetOutOfDate or
+                    // ResourceOutOfDate error?
+                    Err(Error::InvalidHandle)?
                 }
-
-                targets.remove(handle).unwrap();
-                // May be more accurate to have a RenderTargetOutOfDate or
-                // ResourceOutOfDate error?
-                Err(Error::InvalidHandle)
             }
+        };
+
+        frame.reset(&self.api)?;
+        frame
+            .geometry
+            .copy(&self.api, &commands.vertices, &commands.indices)?;
+
+        let used_textures = shader.apply(
+            &self.api,
+            commands,
+            frame.framebuffer,
+            extent,
+            &frame.geometry,
+            frame.command_buffer,
+        )?;
+
+        for texture in used_textures {
+            let mut images = self.images.borrow_mut();
+            let texture = images.get_mut(texture).unwrap();
+            texture.read_count += 1;
+
+            if let Some(write_state) = &texture.write_state {
+                if write_state.is_complete(&self.api)? {
+                    // Return the completed write to the staging
+                    // manager for reuse.
+                    self.staging
+                        .borrow_mut()
+                        .finish(texture.write_state.take().unwrap());
+                } else {
+                    // Make sure that the texture is not being written
+                    // to when we start using it (semaphore == count).
+                    wait_semaphores.push(write_state.semaphore);
+                    wait_values.push(write_state.counter);
+                }
+            }
+
+            // Increment the read semaphore when drawing is
+            // complete, and increment the check to match. Reads
+            // will be complete when semaphore == count.
+            signal_semaphores.push(texture.read_semaphore);
+            signal_values.push(texture.read_count);
         }
+
+        let mut timeline_info = vk::TimelineSemaphoreSubmitInfo {
+            wait_semaphore_value_count: wait_semaphores.len() as u32,
+            p_wait_semaphore_values: wait_values.as_ptr(),
+            signal_semaphore_value_count: signal_semaphores.len() as u32,
+            p_signal_semaphore_values: signal_values.as_ptr(),
+            ..Default::default()
+        };
+
+        unsafe {
+            self.api.device.queue_submit(
+                self.api.graphics_queue,
+                &[vk::SubmitInfo::builder()
+                    .push_next(&mut timeline_info)
+                    .command_buffers(&[frame.command_buffer])
+                    .wait_semaphores(&wait_semaphores)
+                    .signal_semaphores(&signal_semaphores)
+                    .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+                    .build()],
+                frame.fence,
+            )
+        }?;
+
+        Ok(())
     }
 
     fn flush(&self) {
