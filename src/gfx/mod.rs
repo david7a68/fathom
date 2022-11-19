@@ -2,7 +2,7 @@ use crate::handle_pool::Handle;
 
 use self::{
     color::Color,
-    geometry::{Extent, Point, Rect, Offset},
+    geometry::{Extent, Offset, Point, Rect},
     pixel_buffer::{PixelBuffer, PixelBufferView},
 };
 

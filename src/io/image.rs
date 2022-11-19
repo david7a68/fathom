@@ -1,6 +1,9 @@
 use png::{BitDepth, Decoder, DecodingError, Transformations};
 
-use crate::gfx::{pixel_buffer::{ColorSpace, Layout, PixelBuffer}, geometry::{Extent, Px}};
+use crate::gfx::{
+    geometry::{Extent, Px},
+    pixel_buffer::{ColorSpace, Layout, PixelBuffer},
+};
 
 pub const MAX_IMAGE_WIDTH: u32 = Px::MAX.0 as u32;
 pub const MAX_IMAGE_HEIGHT: u32 = Px::MAX.0 as u32;
@@ -12,7 +15,7 @@ pub enum Error {
     #[error("the provided image is too large to decode")]
     ImageTooLarge {
         requested_width: u32,
-        requested_height: u32
+        requested_height: u32,
     },
     #[error("an unknown error was encountered within the decoder")]
     Unknown(DecodingError),
@@ -56,7 +59,7 @@ pub fn decode_png(bytes: &[u8]) -> Result<PixelBuffer, Error> {
 
     Ok(PixelBuffer::new(
         layout,
-        ColorSpace::Srgb,
+        color_space,
         Extent {
             width: Px::try_from(stats.width).unwrap(),
             height: Px::try_from(stats.height).unwrap(),

@@ -167,9 +167,9 @@ impl GfxDevice for VulkanGfxDevice {
 
     fn copy_image(
         &self,
-        src: Handle<super::Image>,
-        dst: Handle<super::Image>,
-        ops: &[ImageCopy],
+        _src: Handle<super::Image>,
+        _dst: Handle<super::Image>,
+        _ops: &[ImageCopy],
     ) -> Result<(), Error> {
         todo!()
     }
@@ -186,7 +186,7 @@ impl GfxDevice for VulkanGfxDevice {
         }
     }
 
-    fn get_image_pixels(&self, handle: Handle<super::Image>) -> Result<PixelBuffer, Error> {
+    fn get_image_pixels(&self, _handle: Handle<super::Image>) -> Result<PixelBuffer, Error> {
         todo!()
     }
 
@@ -318,48 +318,6 @@ impl GfxDevice for VulkanGfxDevice {
 /// Literally, a thing that can be rendered to.
 enum RenderTarget {
     Swapchain(Handle<super::Swapchain>, u64),
-}
-
-/// Helper used to check if required and optional layers and extensions exist
-/// within a set of items.
-///
-/// Returns `None` if one or more required names could not be found, or else
-/// returns all the required names as well as every optional name that was
-/// found.
-fn has_names<T, F: Fn(&T) -> &[c_char]>(
-    items: &[T],
-    to_name: F,
-    required: &[&[c_char]],
-    optional: &[&[c_char]],
-) -> Option<SmallVec<[*const c_char; 8]>> {
-    let mut item_set = std::collections::HashSet::with_capacity(items.len());
-    for item in items {
-        let name = to_name(item);
-        for (i, c) in name.iter().enumerate() {
-            if *c == 0 {
-                item_set.insert(&name[0..=i]);
-                break;
-            }
-        }
-    }
-
-    let mut found_names = SmallVec::new();
-
-    for name in required {
-        if item_set.contains(name) {
-            found_names.push(name.as_ptr());
-        } else {
-            return None;
-        }
-    }
-
-    for name in optional {
-        if item_set.contains(name) {
-            found_names.push(name.as_ptr());
-        }
-    }
-
-    Some(found_names)
 }
 
 impl From<crate::handle_pool::Error> for Error {

@@ -154,7 +154,7 @@ impl<'a> Bytes<'a> {
             cursor,
             last_byte,
             span_width,
-            span_offset
+            span_offset,
         }
     }
 }
