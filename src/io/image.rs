@@ -46,7 +46,7 @@ pub fn decode_png(bytes: &[u8]) -> Result<PixelBuffer, Error> {
     let layout = match stats.color_type {
         png::ColorType::Rgb => Layout::RGB8,
         png::ColorType::Rgba => Layout::RGBA8,
-        _ => panic!("should only ever get RGB or RGBA from the decoder because of the Transformations::EXPAND flag"),
+        _ => unreachable!("should only ever get RGB or RGBA from the decoder because of the Transformations::EXPAND flag"),
     };
 
     // color space

@@ -2,8 +2,8 @@
 //!
 //! ## Assumptions/Requirements
 //!
-//! - all textures stored in RGBA_F16_LINEAR format for simplicity
-//! - must accept all formats used by PixelBuffer (and convert)
+//! - all textures stored in `RGBA_F16_LINEAR` format for simplicity
+//! - must accept all formats used by [`PixelBuffer`] (and convert)
 //! - must permit updating of subtextures in bulk
 //!
 //! ## Using Textures
@@ -219,7 +219,8 @@ impl Staging {
     const RGB_UINT_SHADER: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/image_upload_uint.spv"));
 
-    pub fn new(api: &Vulkan) -> VkResult<Self> {
+        #[allow(clippy::too_many_lines)]
+        pub fn new(api: &Vulkan) -> VkResult<Self> {
         let descriptor_layout = {
             let bindings = [
                 vk::DescriptorSetLayoutBinding {
@@ -304,7 +305,7 @@ impl Staging {
                 ..Default::default()
             };
 
-            let mut sets = [Default::default(); Self::MAX_DESCRIPTORS as usize];
+            let mut sets = [vk::DescriptorSet::default(); Self::MAX_DESCRIPTORS as usize];
             unsafe {
                 (api.device.fp_v1_0().allocate_descriptor_sets)(
                     api.device.handle(),
@@ -314,14 +315,15 @@ impl Staging {
                 .result()?;
             }
 
-            ArrayVec::<_, { Self::MAX_DESCRIPTORS as usize }>::from_iter(
-                sets.iter().enumerate().map(|(i, set)| Descriptor {
+            sets.iter()
+                .enumerate()
+                .map(|(i, set)| Descriptor {
                     handle: *set,
                     target_sampler: vk::Sampler::null(),
                     extent_buffer_offset: (i * std::mem::size_of::<CopyUniforms>())
                         as vk::DeviceSize,
-                }),
-            )
+                })
+                .collect::<ArrayVec<_, { Self::MAX_DESCRIPTORS as usize }>>()
         };
 
         let (extent_buffer, extent_memory) = api.allocate_buffer(
@@ -401,6 +403,7 @@ impl Staging {
         self.io_pool.push(state);
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn copy_pixels(
         &mut self,
         api: &Vulkan,
@@ -656,7 +659,7 @@ impl Staging {
         };
 
         let submit = vk::SubmitInfo {
-            p_next: &timeline_info as *const _ as *const _,
+            p_next: std::ptr::addr_of!(timeline_info).cast(),
             wait_semaphore_count: wait_values.len() as u32,
             p_wait_semaphores: wait_semaphores.as_ptr(),
             p_signal_semaphores: &write_state.semaphore,

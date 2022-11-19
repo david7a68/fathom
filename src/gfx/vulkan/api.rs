@@ -17,6 +17,7 @@ pub struct PhysicalDevice {
     pub present_queue_family: u32,
 }
 
+#[derive(Clone, Copy)]
 pub enum MemoryUsage {
     /// The allocated memory will be used once and then freed.
     Once,
@@ -48,6 +49,7 @@ pub struct Vulkan {
 }
 
 impl Vulkan {
+    #[allow(clippy::too_many_lines)]
     pub fn new(
         required_instance_layers: &[&[c_char]],
         optional_instance_layers: &[&[c_char]],
@@ -298,7 +300,7 @@ impl Vulkan {
 
         let create_info = vk::SemaphoreCreateInfo {
             p_next: if timeline {
-                &timeline_info as *const vk::SemaphoreTypeCreateInfo as *const _
+                std::ptr::addr_of!(timeline_info).cast()
             } else {
                 std::ptr::null()
             },

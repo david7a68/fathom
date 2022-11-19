@@ -139,7 +139,7 @@ impl GfxDevice for VulkanGfxDevice {
                 Ok(()) => Ok(()),
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Err(Error::SwapchainOutOfDate),
                 Err(e) => Err(Error::VulkanInternal { error_code: e }),
-            }?
+            }?;
         }
         Ok(())
     }

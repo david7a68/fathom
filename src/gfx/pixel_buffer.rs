@@ -92,6 +92,7 @@ pub struct PixelBufferView<'a> {
 }
 
 impl<'a> PixelBufferView<'a> {
+    #[must_use]
     pub fn rect(&self) -> Rect {
         self.region
     }
@@ -119,6 +120,7 @@ impl<'a> PixelBufferView<'a> {
         }
     }
 
+    #[must_use]
     pub fn bytes(&self) -> Bytes {
         Bytes::new(self)
     }
