@@ -28,11 +28,12 @@ use smallvec::SmallVec;
 
 use crate::gfx::{
     geometry::{Extent, Offset},
-    pixel_buffer::{Layout, PixelBufferView}, MAX_IMAGES,
+    pixel_buffer::{Layout, PixelBufferView},
+    MAX_IMAGES,
 };
 
 use super::{
-    api::{MemoryUsage, VkResult, Vulkan},
+    api::{next_multiple_of, MemoryUsage, VkResult, Vulkan},
     as_cchar_slice,
 };
 
@@ -194,9 +195,8 @@ struct CopyUniforms {
 
 pub struct Staging {
     rgb_pipeline: vk::Pipeline,
-    rgb_pipeline_layout: vk::PipelineLayout,
-    // rgba_pipeline: vk::Pipeline,
-    // rgba_pipeline_layout: vk::PipelineLayout,
+    rgba_pipeline: vk::Pipeline,
+    pipeline_layout: vk::PipelineLayout,
     command_pool: vk::CommandPool,
 
     sampler: vk::Sampler,
@@ -219,8 +219,8 @@ impl Staging {
     const RGB_UINT_SHADER: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/image_upload_uint.spv"));
 
-        #[allow(clippy::too_many_lines)]
-        pub fn new(api: &Vulkan) -> VkResult<Self> {
+    #[allow(clippy::too_many_lines)]
+    pub fn new(api: &Vulkan) -> VkResult<Self> {
         let descriptor_layout = {
             let bindings = [
                 vk::DescriptorSetLayoutBinding {
@@ -320,15 +320,29 @@ impl Staging {
                 .map(|(i, set)| Descriptor {
                     handle: *set,
                     target_sampler: vk::Sampler::null(),
-                    extent_buffer_offset: (i * std::mem::size_of::<CopyUniforms>())
-                        as vk::DeviceSize,
+                    extent_buffer_offset: i as vk::DeviceSize
+                        * next_multiple_of(
+                            std::mem::size_of::<CopyUniforms>() as vk::DeviceSize,
+                            api.physical_device
+                                .properties
+                                .limits
+                                .min_uniform_buffer_offset_alignment,
+                        ),
                 })
                 .collect::<ArrayVec<_, { Self::MAX_DESCRIPTORS as usize }>>()
         };
 
         let (extent_buffer, extent_memory) = api.allocate_buffer(
             MemoryUsage::Dynamic,
-            (std::mem::size_of::<CopyUniforms>() as u32 * Self::MAX_DESCRIPTORS).into(),
+            (next_multiple_of(
+                std::mem::size_of::<CopyUniforms>() as vk::DeviceSize,
+                api.physical_device
+                    .properties
+                    .limits
+                    .min_uniform_buffer_offset_alignment,
+            ) as u32
+                * Self::MAX_DESCRIPTORS)
+                .into(),
             vk::BufferUsageFlags::UNIFORM_BUFFER,
         )?;
 
@@ -341,8 +355,18 @@ impl Staging {
             )?
         };
 
-        let (rgb_pipeline, rgb_pipeline_layout) =
-            Self::create_rgb8_pipeline(api, descriptor_layout)?;
+        let pipeline_layout = {
+            let create_info = vk::PipelineLayoutCreateInfo {
+                set_layout_count: 1,
+                p_set_layouts: &descriptor_layout,
+                ..Default::default()
+            };
+
+            unsafe { api.device.create_pipeline_layout(&create_info, None) }?
+        };
+
+        let rgb_pipeline = Self::create_rgb8_pipeline(api, pipeline_layout)?;
+        let rgba_pipeline = Self::create_rgba8_pipeline(api, pipeline_layout)?;
 
         let sampler = {
             let create_info = vk::SamplerCreateInfo {
@@ -369,7 +393,8 @@ impl Staging {
 
         Ok(Self {
             rgb_pipeline,
-            rgb_pipeline_layout,
+            rgba_pipeline,
+            pipeline_layout,
             command_pool,
             sampler,
             extent_buffer,
@@ -385,8 +410,9 @@ impl Staging {
     pub fn destroy(&mut self, api: &Vulkan) {
         unsafe {
             api.device.destroy_pipeline(self.rgb_pipeline, None);
+            api.device.destroy_pipeline(self.rgba_pipeline, None);
             api.device
-                .destroy_pipeline_layout(self.rgb_pipeline_layout, None);
+                .destroy_pipeline_layout(self.pipeline_layout, None);
             api.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);
             api.device
@@ -417,7 +443,7 @@ impl Staging {
         }
 
         let bytes_to_copy = (pixels_to_copy * src.layout().bytes_per_pixel()) as vk::DeviceSize;
-        let (buffer, memory) = api.allocate_buffer(
+        let (image_buffer, image_memory) = api.allocate_buffer(
             MemoryUsage::Once,
             bytes_to_copy,
             vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -426,7 +452,7 @@ impl Staging {
         let mut bytes_written = 0;
         let map = unsafe {
             api.device
-                .map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+                .map_memory(image_memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
         }?
         .cast::<u8>();
 
@@ -442,13 +468,13 @@ impl Staging {
         unsafe {
             api.device
                 .flush_mapped_memory_ranges(&[vk::MappedMemoryRange {
-                    memory,
+                    memory: image_memory,
                     offset: 0,
                     size: vk::WHOLE_SIZE,
                     ..Default::default()
                 }])?;
 
-            api.device.unmap_memory(memory);
+            api.device.unmap_memory(image_memory);
         }
 
         let mut write_state = self.alloc_write_state(api)?;
@@ -470,7 +496,7 @@ impl Staging {
 
             let pipeline = match src.layout() {
                 Layout::RGB8 => self.rgb_pipeline,
-                Layout::RGBA8 => todo!(),
+                Layout::RGBA8 => self.rgba_pipeline,
             };
 
             api.device.cmd_bind_pipeline(
@@ -487,7 +513,7 @@ impl Staging {
                 &[],
                 &[],
                 &[vk::ImageMemoryBarrier {
-                    src_access_mask: vk::AccessFlags::SHADER_READ,
+                    src_access_mask: vk::AccessFlags::NONE,
                     dst_access_mask: vk::AccessFlags::SHADER_WRITE,
                     old_layout: dst.image_layout,
                     new_layout: vk::ImageLayout::GENERAL,
@@ -533,14 +559,14 @@ impl Staging {
 
                 api.device
                     .flush_mapped_memory_ranges(&[vk::MappedMemoryRange {
-                        memory,
+                        memory: self.extent_memory,
                         offset: descriptor.extent_buffer_offset,
                         size: std::mem::size_of::<CopyUniforms>() as vk::DeviceSize,
                         ..Default::default()
                     }])?;
 
                 let source = vk::DescriptorBufferInfo {
-                    buffer,
+                    buffer: image_buffer,
                     offset: bytes_copied,
                     range: bytes_to_copy,
                 };
@@ -573,7 +599,7 @@ impl Staging {
                         },
                         vk::WriteDescriptorSet {
                             dst_set: descriptor.handle,
-                            dst_binding: 1,
+                            dst_binding: 2,
                             dst_array_element: 0,
                             descriptor_count: 1,
                             descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
@@ -587,10 +613,10 @@ impl Staging {
                 api.device.cmd_bind_descriptor_sets(
                     write_state.command_buffer,
                     vk::PipelineBindPoint::COMPUTE,
-                    self.rgb_pipeline_layout,
+                    self.pipeline_layout,
                     0,
                     &[descriptor.handle],
-                    &[0],
+                    &[],
                 );
 
                 bytes_copied += bytes_to_copy;
@@ -616,7 +642,7 @@ impl Staging {
                 &[],
                 &[vk::ImageMemoryBarrier {
                     src_access_mask: vk::AccessFlags::SHADER_WRITE,
-                    dst_access_mask: vk::AccessFlags::SHADER_READ,
+                    dst_access_mask: vk::AccessFlags::NONE,
                     old_layout: vk::ImageLayout::GENERAL,
                     new_layout: vk::ImageLayout::READ_ONLY_OPTIMAL,
                     src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
@@ -680,20 +706,7 @@ impl Staging {
         Ok(())
     }
 
-    fn create_rgb8_pipeline(
-        api: &Vulkan,
-        descriptor_layout: vk::DescriptorSetLayout,
-    ) -> VkResult<(vk::Pipeline, vk::PipelineLayout)> {
-        let layout = {
-            let create_info = vk::PipelineLayoutCreateInfo {
-                set_layout_count: 1,
-                p_set_layouts: &descriptor_layout,
-                ..Default::default()
-            };
-
-            unsafe { api.device.create_pipeline_layout(&create_info, None) }?
-        };
-
+    fn create_rgb8_pipeline(api: &Vulkan, layout: vk::PipelineLayout) -> VkResult<vk::Pipeline> {
         assert_eq!(Self::RGB_UINT_SHADER.len() % 4, 0);
         let shader = unsafe {
             api.device.create_shader_module(
@@ -760,7 +773,79 @@ impl Staging {
 
         unsafe { api.device.destroy_shader_module(shader, None) };
 
-        Ok((pipeline, layout))
+        Ok(pipeline)
+    }
+
+    fn create_rgba8_pipeline(api: &Vulkan, layout: vk::PipelineLayout) -> VkResult<vk::Pipeline> {
+        assert_eq!(Self::RGB_UINT_SHADER.len() % 4, 0);
+        let shader = unsafe {
+            api.device.create_shader_module(
+                &vk::ShaderModuleCreateInfo {
+                    code_size: Self::RGB_UINT_SHADER.len(),
+                    p_code: Self::RGB_UINT_SHADER.as_ptr().cast(),
+                    ..Default::default()
+                },
+                None,
+            )
+        }?;
+
+        let specialization_constants: [u32; 2] = [
+            4,   // num_channels
+            255, // channel_range_max
+        ];
+
+        let entries = [
+            // num channels
+            vk::SpecializationMapEntry {
+                constant_id: 0,
+                offset: 0,
+                size: std::mem::size_of::<u32>(),
+            },
+            // channel range max
+            vk::SpecializationMapEntry {
+                constant_id: 1,
+                offset: std::mem::size_of::<u32>() as u32,
+                size: std::mem::size_of::<u32>(),
+            },
+        ];
+
+        let specialization = vk::SpecializationInfo {
+            map_entry_count: 2,
+            p_map_entries: entries.as_ptr(),
+            data_size: std::mem::size_of_val(&entries),
+            p_data: specialization_constants.as_ptr().cast(),
+        };
+
+        let stage = vk::PipelineShaderStageCreateInfo {
+            stage: vk::ShaderStageFlags::COMPUTE,
+            module: shader,
+            p_name: as_cchar_slice(b"main\0").as_ptr(),
+            p_specialization_info: &specialization,
+            ..Default::default()
+        };
+
+        let create_info = vk::ComputePipelineCreateInfo {
+            stage,
+            layout,
+            ..Default::default()
+        };
+
+        let mut pipeline = vk::Pipeline::null();
+        unsafe {
+            (api.device.fp_v1_0().create_compute_pipelines)(
+                api.device.handle(),
+                api.pipeline_cache,
+                1,
+                &create_info,
+                std::ptr::null(),
+                &mut pipeline,
+            )
+        }
+        .result()?;
+
+        unsafe { api.device.destroy_shader_module(shader, None) };
+
+        Ok(pipeline)
     }
 
     fn alloc_write_state(&mut self, api: &Vulkan) -> VkResult<WriteState> {

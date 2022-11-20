@@ -12,7 +12,7 @@ pub mod pixel_buffer;
 mod vulkan;
 
 pub const MAX_SWAPCHAINS: u32 = 32;
-pub const MAX_IMAGES: u32 = 128;
+pub const MAX_IMAGES: u32 = 1;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -209,6 +209,64 @@ impl DrawCommandList {
                 num_indices: NUM_INDICES,
             });
         }
+    }
+
+    /// Draws a rectangle with the specified paint.
+    ///
+    /// ## Panics
+    ///
+    /// This function will panic if the number of vertices or indices exceeds
+    /// `Self::MAX_VERTICES` or `Self::MAX_INDICES` respectively.
+    pub fn draw_image(&mut self, rect: Rect, image: Handle<Image>, region: Rect, paint: Paint) {
+        const NUM_VERTICES: u16 = 4;
+        const NUM_INDICES: u16 = 6;
+
+        assert!(Self::MAX_VERTICES >= self.vertices.len() + NUM_VERTICES as usize);
+        assert!(Self::MAX_INDICES >= self.indices.len() + NUM_INDICES as usize);
+
+        let color = match paint {
+            Paint::Fill { color } => color,
+        };
+
+        let vertex_offset = self.vertices.len() as u16;
+        self.vertices.extend_from_slice(&[
+            Vertex {
+                uv: region.top_left(),
+                point: rect.top_left(),
+                color,
+            },
+            Vertex {
+                uv: region.top_right(),
+                point: rect.top_right(),
+                color,
+            },
+            Vertex {
+                uv: region.bottom_right(),
+                point: rect.bottom_right(),
+                color,
+            },
+            Vertex {
+                uv: region.bottom_left(),
+                point: rect.bottom_left(),
+                color,
+            },
+        ]);
+
+        let index_offset = self.indices.len() as u16;
+        self.indices.extend_from_slice(&[
+            vertex_offset,
+            vertex_offset + 1,
+            vertex_offset + 2,
+            vertex_offset + 2,
+            vertex_offset + 3,
+            vertex_offset,
+        ]);
+
+        self.push_command(Command::Image {
+            image,
+            first_index: index_offset,
+            num_indices: NUM_INDICES,
+        });
     }
 
     fn push_command(&mut self, new_command: Command) {

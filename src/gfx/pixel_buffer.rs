@@ -74,6 +74,11 @@ impl PixelBuffer {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    #[must_use]
+    pub fn view(&self) -> PixelBufferView {
+        self.into()
+    }
 }
 
 impl<'a> From<&'a PixelBuffer> for PixelBufferView<'a> {
@@ -165,7 +170,7 @@ impl<'a> Iterator for Bytes<'a> {
     type Item = &'a [u8];
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.cursor < self.last_byte {
+        if self.cursor + self.span_width < self.last_byte {
             let bytes = &self.pixels.bytes[self.cursor..self.cursor + self.span_width];
             self.cursor += self.span_offset;
             Some(bytes)

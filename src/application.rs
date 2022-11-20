@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 
 use crate::{
-    gfx::{geometry::Extent, init_gfx, DrawCommandList, Swapchain},
+    gfx::{
+        geometry::{Extent, Offset, Point, Rect},
+        init_gfx, DrawCommandList, ImageCopy, Swapchain,
+    },
     gui::{
         input::{ButtonState, Input, MouseButton},
         widgets::{DrawContext, LayoutContext, UpdateContext, Widget},
     },
     handle_pool::Handle,
+    io::image,
     shell::{
         event::{Event, Window as WindowEvent},
         {OsShell, Shell, WindowConfig, WindowId},
@@ -44,6 +48,18 @@ impl Application {
         // TODO(straivers): for efficiency, we really should find a way to bind
         // AppWindow to the HWND directly.
         let mut windows = HashMap::<WindowId, AppWindow>::new();
+
+        let image_buffer = image::decode_png(&std::fs::read("test.png").unwrap()).unwrap();
+        let image = gfx.create_image(image_buffer.extent()).unwrap();
+        gfx.copy_pixels(
+            image_buffer.view(),
+            image,
+            &[ImageCopy {
+                src_rect: Rect::new(Point::zero(), image_buffer.extent()),
+                dst_location: Offset::zero(),
+            }],
+        )
+        .unwrap();
 
         for config in configs {
             let window_id = shell

@@ -47,7 +47,7 @@ const OPTIONAL_DEVICE_EXTENSIONS: &[&[c_char]] = &[];
 const FRAMES_IN_FLIGHT: usize = 2;
 const PREFERRED_SWAPCHAIN_LENGTH: u32 = 2;
 
-const MAX_TEXTURE_DESCRIPTORS: u32 = 1024;
+const MAX_TEXTURE_DESCRIPTORS: u32 = MAX_IMAGES * 8;
 
 pub struct VulkanGfxDevice {
     api: Vulkan,
@@ -105,7 +105,7 @@ impl VulkanGfxDevice {
         let descriptor_layout = {
             let bindings = [vk::DescriptorSetLayoutBinding {
                 binding: 0,
-                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                 descriptor_count: 1,
                 stage_flags: vk::ShaderStageFlags::FRAGMENT,
                 ..Default::default()
@@ -122,7 +122,7 @@ impl VulkanGfxDevice {
 
         let descriptor_pool = {
             let pool_size = [vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLED_IMAGE,
+                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                 descriptor_count: MAX_TEXTURE_DESCRIPTORS,
             }];
 
@@ -186,7 +186,7 @@ impl GfxDevice for VulkanGfxDevice {
         &self,
         hwnd: windows::Win32::Foundation::HWND,
     ) -> Result<Handle<super::Swapchain>, Error> {
-        let window = Window::new(&self.api, hwnd)?;
+        let window = Window::new(&self.api, hwnd, self.descriptor_layout)?;
         Ok(self.windows.borrow_mut().insert(window)?)
     }
 

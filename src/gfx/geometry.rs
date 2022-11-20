@@ -119,6 +119,13 @@ pub struct Point {
 }
 
 impl Point {
+    pub fn new(x: impl Into<Px>, y: impl Into<Px>) -> Self {
+        Self {
+            x: x.into(),
+            y: y.into(),
+        }
+    }
+
     #[must_use]
     pub fn zero() -> Self {
         Self::default()
@@ -239,7 +246,7 @@ impl Extent {
 
     #[must_use]
     pub fn area(&self) -> usize {
-        (self.width.0 * self.height.0) as usize
+        self.width.0 as usize * self.height.0 as usize
     }
 }
 

@@ -3,9 +3,12 @@ pub mod layout;
 pub mod split_panel;
 pub mod tabbed_panel;
 
-use crate::gfx::{
-    geometry::{Extent, Offset, Point, Rect},
-    DrawCommandList, Paint,
+use crate::{
+    gfx::{
+        geometry::{Extent, Offset, Point, Rect},
+        DrawCommandList, Image, Paint,
+    },
+    handle_pool::Handle,
 };
 
 use super::input::{Event, Input};
@@ -248,6 +251,11 @@ impl<'a> DrawContext<'a> {
         // convert the rect into absolute coordinates
         let rect = rect + self.current_offset;
         self.draw_commands.draw_rect(rect, *paint);
+    }
+
+    pub fn draw_image(&mut self, rect: Rect, image: Handle<Image>, region: Rect, paint: &Paint) {
+        let rect = rect + self.current_offset;
+        self.draw_commands.draw_image(rect, image, region, *paint);
     }
 }
 

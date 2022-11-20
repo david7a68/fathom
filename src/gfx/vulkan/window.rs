@@ -39,7 +39,11 @@ pub struct Window {
 
 impl Window {
     #[cfg(target_os = "windows")]
-    pub fn new(api: &Vulkan, hwnd: windows::Win32::Foundation::HWND) -> VkResult<Self> {
+    pub fn new(
+        api: &Vulkan,
+        hwnd: windows::Win32::Foundation::HWND,
+        descriptor_layout: vk::DescriptorSetLayout,
+    ) -> VkResult<Self> {
         use windows::Win32::{
             Foundation::RECT, System::LibraryLoader::GetModuleHandleW,
             UI::WindowsAndMessaging::GetClientRect,
@@ -65,14 +69,19 @@ impl Window {
             }
         };
 
-        Self::_new(api, surface, extent)
+        Self::_new(api, surface, extent, descriptor_layout)
     }
 
     /// Platform-independent code for initializing a window. See `new` for the
     /// platform-dependent coe needed to call this method.
-    fn _new(api: &Vulkan, surface: vk::SurfaceKHR, extent: vk::Extent2D) -> VkResult<Self> {
+    fn _new(
+        api: &Vulkan,
+        surface: vk::SurfaceKHR,
+        extent: vk::Extent2D,
+        descriptor_layout: vk::DescriptorSetLayout,
+    ) -> VkResult<Self> {
         let swapchain = Swapchain::new(api, surface, extent)?;
-        let shader = UiShader::new(api, swapchain.format)?;
+        let shader = UiShader::new(api, swapchain.format, descriptor_layout)?;
 
         let mut frames = Vec::new();
         regenerate_frames(api, &swapchain, &shader, &mut frames)?;

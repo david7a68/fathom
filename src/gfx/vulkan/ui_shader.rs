@@ -1,10 +1,6 @@
 use ash::vk;
-use smallvec::SmallVec;
 
-use crate::{
-    gfx::{self, color::Color, geometry::Point, Command, DrawCommandList, Vertex, MAX_IMAGES},
-    handle_pool::Handle,
-};
+use crate::gfx::{color::Color, geometry::Point, Vertex};
 
 use super::{
     api::{next_multiple_of, Vulkan},
@@ -68,7 +64,11 @@ pub struct UiShader {
 
 impl UiShader {
     #[allow(clippy::too_many_lines)]
-    pub fn new(api: &Vulkan, format: vk::Format) -> Result<Self, vk::Result> {
+    pub fn new(
+        api: &Vulkan,
+        format: vk::Format,
+        descriptor_layout: vk::DescriptorSetLayout,
+    ) -> Result<Self, vk::Result> {
         let layout = {
             let push_constant_range = [
                 vk::PushConstantRange::builder()
@@ -91,8 +91,9 @@ impl UiShader {
                     .build(),
             ];
 
-            let pipeline_layout_ci =
-                vk::PipelineLayoutCreateInfo::builder().push_constant_ranges(&push_constant_range);
+            let pipeline_layout_ci = vk::PipelineLayoutCreateInfo::builder()
+                .push_constant_ranges(&push_constant_range)
+                .set_layouts(std::slice::from_ref(&descriptor_layout));
 
             unsafe {
                 api.device
@@ -381,6 +382,7 @@ impl UiShader {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_textured(
         &self,
         api: &Vulkan,
@@ -428,7 +430,7 @@ impl UiShader {
                     dst_binding: 0,
                     dst_array_element: 0,
                     descriptor_count: 1,
-                    descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                     p_image_info: texture,
                     ..Default::default()
                 }],
@@ -441,7 +443,7 @@ impl UiShader {
                 self.layout,
                 0,
                 &[descriptor],
-                &[0],
+                &[],
             );
 
             api.device.cmd_push_constants(
