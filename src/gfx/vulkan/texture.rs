@@ -217,7 +217,7 @@ impl Staging {
     const MAX_DESCRIPTORS: u32 = Self::MAX_CONCURRENT_IO * 4;
 
     const RGB_UINT_SHADER: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/image_upload_uint.spv"));
+        include_bytes!(concat!(env!("OUT_DIR"), "/image_upload_uint.comp.spv"));
 
     #[allow(clippy::too_many_lines)]
     pub fn new(api: &Vulkan) -> VkResult<Self> {
