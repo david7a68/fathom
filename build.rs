@@ -8,8 +8,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=resources/shaders");
 
     let compiler = Compiler::new(SHADER_DIR, std::env::var_os("OUT_DIR").unwrap());
-    compiler.compile_shader("ui.vert.glsl");
-    compiler.compile_shader("ui.frag.glsl");
+    compiler.compile_shader("fill.vert.glsl");
+    compiler.compile_shader("fill.frag.glsl");
     compiler.compile_shader("image_upload_uint.comp.glsl");
 
     Ok(())

@@ -1,6 +1,7 @@
 mod api;
+mod geometry;
+mod shaders;
 mod texture;
-mod ui_shader;
 mod window;
 
 use std::{cell::RefCell, collections::HashMap, ffi::c_char};
@@ -12,13 +13,15 @@ use smallvec::SmallVec;
 use crate::handle_pool::{Handle, HandlePool};
 
 use self::{
-    api::{MemoryUsage, Vulkan},
+    api::Vulkan,
+    geometry::UiGeometryBuffer,
+    shaders::{DefaultRenderPass, Fill},
     texture::{Staging, Texture},
-    ui_shader::{UiGeometryBuffer, UiShader},
     window::Window,
 };
 
 use super::{
+    color::Color,
     geometry::{Extent, Rect},
     pixel_buffer::{PixelBuffer, PixelBufferView},
     DrawCommandList, Error, GfxDevice, ImageCopy, MAX_IMAGES, MAX_SWAPCHAINS,
@@ -58,7 +61,8 @@ pub struct VulkanGfxDevice {
     descriptor_pool: vk::DescriptorPool,
     descriptor_layout: vk::DescriptorSetLayout,
 
-    shaders: RefCell<HashMap<vk::Format, UiShader>>,
+    render_pass: DefaultRenderPass,
+    shaders: RefCell<HashMap<vk::Format, Fill>>,
     windows: RefCell<HandlePool<Window, super::Swapchain, MAX_SWAPCHAINS>>,
     images: RefCell<HandlePool<Texture, super::Image, MAX_IMAGES>>,
     staging: RefCell<Staging>,
@@ -162,12 +166,15 @@ impl VulkanGfxDevice {
 
         let staging = Staging::new(&api)?;
 
+        let render_pass = DefaultRenderPass::new(&api, vk::Format::B8G8R8A8_SRGB);
+
         Ok(Self {
             api,
             sampler,
             descriptor_sets: RefCell::new(descriptor_sets),
             descriptor_pool,
             descriptor_layout,
+            render_pass,
             shaders: RefCell::new(HashMap::with_capacity(1)),
             windows: RefCell::new(HandlePool::preallocate()),
             images: RefCell::new(HandlePool::preallocate_n(8)),
@@ -187,6 +194,11 @@ impl Drop for VulkanGfxDevice {
                 .destroy_descriptor_set_layout(self.descriptor_layout, None);
             self.api.device.destroy_sampler(self.sampler, None);
         }
+
+        for (_, shader) in self.shaders.borrow_mut().drain() {
+            shader.destroy(&self.api);
+        }
+
         self.staging.borrow_mut().destroy(&self.api);
     }
 }
@@ -199,9 +211,9 @@ impl GfxDevice for VulkanGfxDevice {
         let window = Window::new(&self.api, hwnd)?;
 
         let mut shaders = self.shaders.borrow_mut();
-        shaders.entry(window.format()).or_insert_with(|| {
-            UiShader::new(&self.api, window.format(), self.descriptor_layout).unwrap()
-        });
+        shaders
+            .entry(window.format())
+            .or_insert_with(|| Fill::new(&self.api, self.render_pass.handle).unwrap());
 
         Ok(self.windows.borrow_mut().insert(window)?)
     }
@@ -306,7 +318,9 @@ impl GfxDevice for VulkanGfxDevice {
 
                 let shader = shaders.get(&window.format()).unwrap();
                 let (image_view, extent, sync, target) = window.render_state();
-                let new_framebuffer = shader.create_framebuffer(&self.api, image_view, extent)?;
+                let new_framebuffer = self
+                    .render_pass
+                    .create_framebuffer(&self.api, extent, image_view);
 
                 wait_values.push(0);
                 wait_semaphores.push(sync.acquire_semaphore);
@@ -336,7 +350,46 @@ impl GfxDevice for VulkanGfxDevice {
             )
         }?;
 
-        shader.begin(&self.api, target.framebuffer, extent, target.command_buffer);
+        unsafe {
+            self.api.device.cmd_begin_render_pass(
+                target.command_buffer,
+                &vk::RenderPassBeginInfo::builder()
+                    .render_pass(self.render_pass.handle)
+                    .framebuffer(target.framebuffer)
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D::default(),
+                        extent,
+                    })
+                    .clear_values(&[vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: Color::BLACK.to_array(),
+                        },
+                    }]),
+                vk::SubpassContents::INLINE,
+            );
+
+            self.api.device.cmd_set_viewport(
+                target.command_buffer,
+                0,
+                &[vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: extent.width as f32,
+                    height: extent.height as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }],
+            );
+
+            self.api.device.cmd_set_scissor(
+                target.command_buffer,
+                0,
+                &[vk::Rect2D {
+                    offset: vk::Offset2D::default(),
+                    extent,
+                }],
+            );
+        }
 
         let mut used_textures = SmallVec::<[Handle<super::Image>; 32]>::new();
         for command in commands.commands.iter().chain(commands.current.as_ref()) {
@@ -364,40 +417,45 @@ impl GfxDevice for VulkanGfxDevice {
                     first_index,
                     num_indices,
                 } => {
-                    let textures = self.images.borrow_mut();
-                    // todo: cleanup if fails
-                    let texture = textures.get(*image).unwrap();
+                    // let textures = self.images.borrow_mut();
+                    // // todo: cleanup if fails
+                    // let texture = textures.get(*image).unwrap();
 
-                    debug_assert_eq!(texture.image_layout, vk::ImageLayout::READ_ONLY_OPTIMAL);
-                    let texture_info = vk::DescriptorImageInfo {
-                        sampler: self.sampler,
-                        image_view: texture.image_view,
-                        image_layout: vk::ImageLayout::READ_ONLY_OPTIMAL,
-                    };
+                    // debug_assert_eq!(texture.image_layout, vk::ImageLayout::READ_ONLY_OPTIMAL);
+                    // let texture_info = vk::DescriptorImageInfo {
+                    //     sampler: self.sampler,
+                    //     image_view: texture.image_view,
+                    //     image_layout: vk::ImageLayout::READ_ONLY_OPTIMAL,
+                    // };
 
-                    let descriptor = self.descriptor_sets.borrow_mut().pop().unwrap();
-                    target.descriptors.push(descriptor);
+                    // let descriptor = self.descriptor_sets.borrow_mut().pop().unwrap();
+                    // target.descriptors.push(descriptor);
 
-                    shader.draw_textured(
-                        &self.api,
-                        *first_index,
-                        *num_indices,
-                        extent,
-                        &texture_info,
-                        descriptor,
-                        &target.geometry,
-                        target.command_buffer,
-                    );
+                    // shader.draw_textured(
+                    //     &self.api,
+                    //     *first_index,
+                    //     *num_indices,
+                    //     extent,
+                    //     &texture_info,
+                    //     descriptor,
+                    //     &target.geometry,
+                    //     target.command_buffer,
+                    // );
 
-                    used_textures.push(*image);
+                    // used_textures.push(*image);
                     todo!()
                 }
             }
         }
 
-        shader.end(&self.api, target.command_buffer);
         // todo cleanup on error
-        unsafe { self.api.device.end_command_buffer(target.command_buffer) }.unwrap();
+        unsafe {
+            self.api.device.cmd_end_render_pass(target.command_buffer);
+            self.api
+                .device
+                .end_command_buffer(target.command_buffer)
+                .unwrap();
+        }
 
         used_textures.sort();
         used_textures.dedup();

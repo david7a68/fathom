@@ -61,7 +61,6 @@ impl From<Handle<Swapchain>> for RenderTarget {
 /// to [`Layout`] and [`ColorSpace`] for more details.
 pub struct Image {}
 
-
 impl From<Handle<Image>> for RenderTarget {
     fn from(val: Handle<Image>) -> Self {
         RenderTarget::Image(val)
@@ -377,11 +376,7 @@ pub trait GfxDevice {
     /// once in the render target will be overwritten.
     ///
     /// The command list can be reused immediately once this method returns.
-    fn draw(
-        &self,
-        render_target: RenderTarget,
-        commands: &DrawCommandList,
-    ) -> Result<(), Error>;
+    fn draw(&self, render_target: RenderTarget, commands: &DrawCommandList) -> Result<(), Error>;
 
     /// Flushes all work from the device. This stalls the backend and can hurt
     /// performance.

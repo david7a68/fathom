@@ -98,7 +98,7 @@ impl Widget for FillImage {
 
     fn for_each_child_mut<'a>(&'a mut self, _: &mut dyn FnMut(&'a mut dyn Widget)) {}
 
-    fn accept_update(&mut self, context: &mut UpdateContext) -> PostUpdate {
+    fn accept_update(&mut self, _context: &mut UpdateContext) -> PostUpdate {
         PostUpdate::NoChange
     }
 
