@@ -69,7 +69,6 @@ impl Application {
                 })
                 .unwrap();
 
-            // let swapchain = renderer.create_swapchain(shell.hwnd(window_id)).unwrap();
             let swapchain = gfx.create_swapchain(shell.hwnd(window_id)).unwrap();
 
             windows.insert(
@@ -129,13 +128,10 @@ impl Application {
                                     .begin(window.widget_tree.as_mut(), window.extent);
 
                                 draw_commands.clear();
-                                let target =
-                                    gfx.get_next_swapchain_image(window.swapchain).unwrap();
                                 let mut draw_context = DrawContext::new(&mut draw_commands);
                                 draw_context.draw(window.widget_tree.as_ref());
-                                gfx.draw(target, &draw_commands).unwrap();
-                                gfx.destroy_render_target(target).unwrap();
-                                gfx.present_swapchain_images(&[window.swapchain]).unwrap();
+                                gfx.draw(window.swapchain.into(), &draw_commands).unwrap();
+                                gfx.present_swapchains(&[window.swapchain]).unwrap();
                                 window.needs_repaint = false;
                             }
                         }

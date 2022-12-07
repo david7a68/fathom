@@ -3,7 +3,7 @@ mod texture;
 mod ui_shader;
 mod window;
 
-use std::{cell::RefCell, ffi::c_char};
+use std::{cell::RefCell, collections::HashMap, ffi::c_char};
 
 use arrayvec::ArrayVec;
 use ash::vk;
@@ -14,6 +14,7 @@ use crate::handle_pool::{Handle, HandlePool};
 use self::{
     api::{MemoryUsage, Vulkan},
     texture::{Staging, Texture},
+    ui_shader::{UiGeometryBuffer, UiShader},
     window::Window,
 };
 
@@ -57,8 +58,8 @@ pub struct VulkanGfxDevice {
     descriptor_pool: vk::DescriptorPool,
     descriptor_layout: vk::DescriptorSetLayout,
 
+    shaders: RefCell<HashMap<vk::Format, UiShader>>,
     windows: RefCell<HandlePool<Window, super::Swapchain, MAX_SWAPCHAINS>>,
-    render_targets: RefCell<HandlePool<RenderTarget, super::RenderTarget, 128>>,
     images: RefCell<HandlePool<Texture, super::Image, MAX_IMAGES>>,
     staging: RefCell<Staging>,
 }
@@ -167,8 +168,8 @@ impl VulkanGfxDevice {
             descriptor_sets: RefCell::new(descriptor_sets),
             descriptor_pool,
             descriptor_layout,
+            shaders: RefCell::new(HashMap::with_capacity(1)),
             windows: RefCell::new(HandlePool::preallocate()),
-            render_targets: RefCell::new(HandlePool::preallocate()),
             images: RefCell::new(HandlePool::preallocate_n(8)),
             staging: RefCell::new(staging),
         })
@@ -177,6 +178,15 @@ impl VulkanGfxDevice {
 
 impl Drop for VulkanGfxDevice {
     fn drop(&mut self) {
+        unsafe {
+            self.api
+                .device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
+            self.api
+                .device
+                .destroy_descriptor_set_layout(self.descriptor_layout, None);
+            self.api.device.destroy_sampler(self.sampler, None);
+        }
         self.staging.borrow_mut().destroy(&self.api);
     }
 }
@@ -186,7 +196,13 @@ impl GfxDevice for VulkanGfxDevice {
         &self,
         hwnd: windows::Win32::Foundation::HWND,
     ) -> Result<Handle<super::Swapchain>, Error> {
-        let window = Window::new(&self.api, hwnd, self.descriptor_layout)?;
+        let window = Window::new(&self.api, hwnd)?;
+
+        let mut shaders = self.shaders.borrow_mut();
+        shaders.entry(window.format()).or_insert_with(|| {
+            UiShader::new(&self.api, window.format(), self.descriptor_layout).unwrap()
+        });
+
         Ok(self.windows.borrow_mut().insert(window)?)
     }
 
@@ -210,21 +226,9 @@ impl GfxDevice for VulkanGfxDevice {
         Ok(())
     }
 
-    fn get_next_swapchain_image(
-        &self,
-        handle: Handle<super::Swapchain>,
-    ) -> Result<Handle<super::RenderTarget>, Error> {
+    fn present_swapchains(&self, handles: &[Handle<super::Swapchain>]) -> Result<(), Error> {
         let mut windows = self.windows.borrow_mut();
-        let window = windows.get_mut(handle)?;
-        window.get_next_image(&self.api)?;
 
-        let mut render_targets = self.render_targets.borrow_mut();
-        let handle = render_targets.insert(RenderTarget::Swapchain(handle, window.frame_id()))?;
-        Ok(handle)
-    }
-
-    fn present_swapchain_images(&self, handles: &[Handle<super::Swapchain>]) -> Result<(), Error> {
-        let mut windows = self.windows.borrow_mut();
         for handle in handles {
             let window = windows.get_mut(*handle)?;
             match window.present(&self.api) {
@@ -282,24 +286,9 @@ impl GfxDevice for VulkanGfxDevice {
         todo!()
     }
 
-    fn destroy_render_target(&self, handle: Handle<super::RenderTarget>) -> Result<(), Error> {
-        let mut targets = self.render_targets.borrow_mut();
-        let render_target = targets.remove(handle)?;
-
-        match render_target {
-            RenderTarget::Swapchain(..) => {
-                // We don't need to do anything here. It doesn't matter if the
-                // swapchain still exists or not, since we're not going to do
-                // anything with it anymore.
-            }
-        }
-
-        Ok(())
-    }
-
     fn draw(
         &self,
-        handle: Handle<super::RenderTarget>,
+        render_target: super::RenderTarget,
         commands: &DrawCommandList,
     ) -> Result<(), Error> {
         let mut wait_values = SmallVec::<[_; MAX_IMAGES as usize]>::new();
@@ -307,59 +296,54 @@ impl GfxDevice for VulkanGfxDevice {
         let mut signal_values = SmallVec::<[_; MAX_IMAGES as usize]>::new();
         let mut signal_semaphores = SmallVec::<[_; MAX_IMAGES as usize]>::new();
 
-        let mut targets = self.render_targets.borrow_mut();
+        let shaders = self.shaders.borrow();
+
         let mut windows = self.windows.borrow_mut();
-        let (frame, extent, shader) = match targets.get(handle)? {
-            RenderTarget::Swapchain(window_handle, frame_id) => {
-                if let Ok(window) = windows.get_mut(*window_handle) {
-                    if *frame_id == window.frame_id() {
-                        let (frame, extent, sync, shader) = window.render_state();
+        let (target, extent, new_framebuffer, shader) = match render_target {
+            super::RenderTarget::Swapchain(handle) => {
+                let window = windows.get_mut(handle)?;
+                window.get_next_image(&self.api).unwrap();
 
-                        // Vulkan Spec requires that wait_values.len() == wait_semaphores.len().
-                        wait_values.push(0);
-                        wait_semaphores.push(sync.acquire_semaphore);
-                        // ditto
-                        signal_values.push(0);
-                        signal_semaphores.push(sync.present_semaphore);
+                let shader = shaders.get(&window.format()).unwrap();
+                let (image_view, extent, sync, target) = window.render_state();
+                let new_framebuffer = shader.create_framebuffer(&self.api, image_view, extent)?;
 
-                        (frame, extent, shader)
-                    } else {
-                        targets.remove(handle).unwrap();
-                        Err(Error::InvalidHandle)?
-                    }
-                } else {
-                    targets.remove(handle).unwrap();
-                    // May be more accurate to have a RenderTargetOutOfDate or
-                    // ResourceOutOfDate error?
-                    Err(Error::InvalidHandle)?
-                }
+                wait_values.push(0);
+                wait_semaphores.push(sync.acquire_semaphore);
+                signal_values.push(0);
+                signal_semaphores.push(sync.present_semaphore);
+
+                (target, extent, new_framebuffer, shader)
             }
+            super::RenderTarget::Image(_) => todo!(),
         };
 
-        frame.reset(&self.api)?;
+        target.make_ready(&self.api, new_framebuffer);
+
         self.descriptor_sets
             .borrow_mut()
-            .extend(frame.descriptors.drain(..));
-        frame
+            .extend(target.descriptors.drain(..));
+
+        target
             .geometry
             .copy(&self.api, &commands.vertices, &commands.indices)?;
 
         unsafe {
             self.api.device.begin_command_buffer(
-                frame.command_buffer,
+                target.command_buffer,
                 &vk::CommandBufferBeginInfo::builder()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )
         }?;
 
-        shader.begin(&self.api, frame.framebuffer, extent, frame.command_buffer);
+        shader.begin(&self.api, target.framebuffer, extent, target.command_buffer);
 
         let mut used_textures = SmallVec::<[Handle<super::Image>; 32]>::new();
         for command in commands.commands.iter().chain(commands.current.as_ref()) {
             match command {
                 super::Command::Scissor { rect } => unsafe {
                     self.api.device.cmd_set_scissor(
-                        frame.command_buffer,
+                        target.command_buffer,
                         0,
                         &[vk::Rect2D::from(*rect)],
                     )
@@ -372,8 +356,8 @@ impl GfxDevice for VulkanGfxDevice {
                     *first_index,
                     *num_indices,
                     extent,
-                    &frame.geometry,
-                    frame.command_buffer,
+                    &target.geometry,
+                    target.command_buffer,
                 ),
                 super::Command::Image {
                     image,
@@ -392,7 +376,7 @@ impl GfxDevice for VulkanGfxDevice {
                     };
 
                     let descriptor = self.descriptor_sets.borrow_mut().pop().unwrap();
-                    frame.descriptors.push(descriptor);
+                    target.descriptors.push(descriptor);
 
                     shader.draw_textured(
                         &self.api,
@@ -401,8 +385,8 @@ impl GfxDevice for VulkanGfxDevice {
                         extent,
                         &texture_info,
                         descriptor,
-                        &frame.geometry,
-                        frame.command_buffer,
+                        &target.geometry,
+                        target.command_buffer,
                     );
 
                     used_textures.push(*image);
@@ -411,9 +395,9 @@ impl GfxDevice for VulkanGfxDevice {
             }
         }
 
-        shader.end(&self.api, frame.command_buffer);
+        shader.end(&self.api, target.command_buffer);
         // todo cleanup on error
-        unsafe { self.api.device.end_command_buffer(frame.command_buffer) }.unwrap();
+        unsafe { self.api.device.end_command_buffer(target.command_buffer) }.unwrap();
 
         used_textures.sort();
         used_textures.dedup();
@@ -458,12 +442,12 @@ impl GfxDevice for VulkanGfxDevice {
                 self.api.graphics_queue,
                 &[vk::SubmitInfo::builder()
                     .push_next(&mut timeline_info)
-                    .command_buffers(&[frame.command_buffer])
+                    .command_buffers(&[target.command_buffer])
                     .wait_semaphores(&wait_semaphores)
                     .signal_semaphores(&signal_semaphores)
                     .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
                     .build()],
-                frame.fence,
+                target.fence,
             )
         }?;
 
@@ -475,9 +459,70 @@ impl GfxDevice for VulkanGfxDevice {
     }
 }
 
-/// Literally, a thing that can be rendered to.
-enum RenderTarget {
-    Swapchain(Handle<super::Swapchain>, u64),
+pub(self) struct RenderFrame {
+    framebuffer: vk::Framebuffer,
+    command_pool: vk::CommandPool,
+    command_buffer: vk::CommandBuffer,
+    geometry: UiGeometryBuffer,
+    descriptors: SmallVec<[vk::DescriptorSet; 2]>,
+    fence: vk::Fence,
+}
+
+impl RenderFrame {
+    fn new(api: &Vulkan) -> Self {
+        let command_pool = {
+            let create_info = vk::CommandPoolCreateInfo::builder()
+                .queue_family_index(api.physical_device.graphics_queue_family);
+            unsafe { api.device.create_command_pool(&create_info, None) }.unwrap()
+        };
+
+        let command_buffer = api.allocate_command_buffer(command_pool).unwrap();
+
+        let fence = {
+            let create_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
+            unsafe { api.device.create_fence(&create_info, None) }.unwrap()
+        };
+
+        Self {
+            framebuffer: vk::Framebuffer::null(),
+            command_pool,
+            command_buffer,
+            geometry: UiGeometryBuffer::new(api).unwrap(),
+            descriptors: SmallVec::new(),
+            fence,
+        }
+    }
+
+    fn destroy(self, api: &Vulkan) {
+        unsafe {
+            api.device
+                .wait_for_fences(&[self.fence], true, u64::MAX)
+                .unwrap();
+            assert!(
+                self.descriptors.is_empty(),
+                "must free descriptors before destroying frame"
+            );
+
+            api.device.destroy_fence(self.fence, None);
+            api.device.destroy_command_pool(self.command_pool, None);
+            api.device.destroy_framebuffer(self.framebuffer, None);
+            self.geometry.destroy(api);
+        }
+    }
+
+    fn make_ready(&mut self, api: &Vulkan, framebuffer: vk::Framebuffer) {
+        unsafe {
+            api.device
+                .wait_for_fences(&[self.fence], true, u64::MAX)
+                .unwrap();
+            api.device.reset_fences(&[self.fence]).unwrap();
+            api.device
+                .reset_command_pool(self.command_pool, vk::CommandPoolResetFlags::empty())
+                .unwrap();
+            api.device.destroy_framebuffer(self.framebuffer, None);
+        }
+        self.framebuffer = framebuffer;
+    }
 }
 
 impl From<crate::handle_pool::Error> for Error {

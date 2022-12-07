@@ -1,20 +1,21 @@
 use ash::vk;
+use smallvec::SmallVec;
 
 use super::{
     api::{VkResult, Vulkan},
-    ui_shader::{UiGeometryBuffer, UiShader},
-    FRAMES_IN_FLIGHT, PREFERRED_SWAPCHAIN_LENGTH,
+    RenderFrame, FRAMES_IN_FLIGHT, PREFERRED_SWAPCHAIN_LENGTH,
 };
+
+pub struct FrameSync {
+    pub acquire_semaphore: vk::Semaphore,
+    pub present_semaphore: vk::Semaphore,
+}
 
 /// Utility struct that holds members relating to a specific window. Swapchain
 /// details are separate to delineate the frequency with which things change.
 pub struct Window {
     /// The window's swapchain.
     swapchain: Swapchain,
-
-    /// Dependent on swapchain format. Though this could technically change on
-    /// resize, I know of no circumstance in which this actually happens.
-    shader: UiShader,
 
     /// A monotonically increasing id used to keep track of which `FrameSync`
     /// object to use each frame.
@@ -27,23 +28,16 @@ pub struct Window {
     /// this check is actually useful, but it was left in just in case.
     current_image: Option<u32>,
 
-    // Though frames change every time the swapchain is resized, only a part of
-    // it changes so it's been left out here. There is much opportunity to split
-    // hairs here.
-    frames: Vec<Frame>,
-
-    /// Frame synchronization objects, used in alternating order as tracked by
+    /// SwapchainImage synchronization objects, used in alternating order as tracked by
     /// `frame_id`.
     frame_sync: [FrameSync; FRAMES_IN_FLIGHT],
+
+    render_targets: [RenderFrame; FRAMES_IN_FLIGHT],
 }
 
 impl Window {
     #[cfg(target_os = "windows")]
-    pub fn new(
-        api: &Vulkan,
-        hwnd: windows::Win32::Foundation::HWND,
-        descriptor_layout: vk::DescriptorSetLayout,
-    ) -> VkResult<Self> {
+    pub fn new(api: &Vulkan, hwnd: windows::Win32::Foundation::HWND) -> VkResult<Self> {
         use windows::Win32::{
             Foundation::RECT, System::LibraryLoader::GetModuleHandleW,
             UI::WindowsAndMessaging::GetClientRect,
@@ -69,54 +63,55 @@ impl Window {
             }
         };
 
-        Self::_new(api, surface, extent, descriptor_layout)
+        Self::_new(api, surface, extent)
     }
 
     /// Platform-independent code for initializing a window. See `new` for the
     /// platform-dependent coe needed to call this method.
-    fn _new(
-        api: &Vulkan,
-        surface: vk::SurfaceKHR,
-        extent: vk::Extent2D,
-        descriptor_layout: vk::DescriptorSetLayout,
-    ) -> VkResult<Self> {
-        let swapchain = Swapchain::new(api, surface, extent)?;
-        let shader = UiShader::new(api, swapchain.format, descriptor_layout)?;
-
-        let mut frames = Vec::new();
-        regenerate_frames(api, &swapchain, &shader, &mut frames)?;
-
+    fn _new(api: &Vulkan, surface: vk::SurfaceKHR, extent: vk::Extent2D) -> VkResult<Self> {
         Ok(Self {
-            swapchain,
-            shader,
+            swapchain: Swapchain::new(api, surface, extent)?,
             frame_id: 0,
             current_image: None,
-            frames,
-            frame_sync: [FrameSync::new(api)?, FrameSync::new(api)?],
+            frame_sync: [
+                FrameSync {
+                    acquire_semaphore: api.create_semaphore(false).unwrap(),
+                    present_semaphore: api.create_semaphore(false).unwrap(),
+                },
+                FrameSync {
+                    acquire_semaphore: api.create_semaphore(false).unwrap(),
+                    present_semaphore: api.create_semaphore(false).unwrap(),
+                },
+            ],
+            render_targets: [RenderFrame::new(api), RenderFrame::new(api)],
         })
     }
 
-    pub fn destroy(mut self, api: &Vulkan) {
+    pub fn destroy(self, api: &Vulkan) {
         self.swapchain.destroy(api);
-        self.shader.destroy(&api.device);
-        for frame in self.frames.drain(..) {
-            frame.destroy(api);
-        }
         for sync in self.frame_sync {
-            sync.destroy(&api.device);
+            unsafe {
+                api.device.destroy_semaphore(sync.acquire_semaphore, None);
+                api.device.destroy_semaphore(sync.present_semaphore, None);
+            }
+        }
+        for target in self.render_targets {
+            target.destroy(api);
         }
     }
 
-    pub fn frame_id(&self) -> u64 {
-        self.frame_id
+    pub fn format(&self) -> vk::Format {
+        self.swapchain.format
     }
 
-    pub fn render_state(&mut self) -> (&mut Frame, vk::Extent2D, &FrameSync, &UiShader) {
+    pub(super) fn render_state(
+        &mut self,
+    ) -> (vk::ImageView, vk::Extent2D, &FrameSync, &mut RenderFrame) {
         (
-            &mut self.frames[self.current_image.unwrap() as usize],
+            self.swapchain.views[self.current_image.unwrap() as usize],
             self.swapchain.extent,
             &self.frame_sync[self.frame_id as usize % FRAMES_IN_FLIGHT],
-            &self.shader,
+            &mut self.render_targets[self.frame_id as usize % FRAMES_IN_FLIGHT],
         )
     }
 
@@ -124,7 +119,7 @@ impl Window {
     pub fn resize(&mut self, api: &Vulkan, extent: vk::Extent2D) -> VkResult<()> {
         unsafe { api.device.device_wait_idle() }?;
         self.swapchain.resize(api, extent)?;
-        regenerate_frames(api, &self.swapchain, &self.shader, &mut self.frames)
+        Ok(())
     }
 
     pub fn get_next_image(&mut self, api: &Vulkan) -> VkResult<()> {
@@ -171,118 +166,6 @@ impl Window {
     }
 }
 
-/// Utility struct that contains all the ancillary information needed to render
-/// a frame. Each window has `FRAME_IN_FLIGHT` `Frame`s that are used
-/// alternately to allow a previously submitted frame to complete on the GPU.
-pub struct Frame {
-    pub image: vk::Image,
-    pub image_view: vk::ImageView,
-    pub framebuffer: vk::Framebuffer,
-    pub command_pool: vk::CommandPool,
-    pub command_buffer: vk::CommandBuffer,
-
-    pub geometry: UiGeometryBuffer,
-    // todo: smallvec?
-    pub descriptors: Vec<vk::DescriptorSet>,
-
-    /// The fence is used to determine when the GPU is done rendering this
-    /// frame. Once rendering is done, the command pool can be reset, and the
-    /// buffer reused.
-    ///
-    /// NOTE: It is not sufficient to check that all the fences are signalled
-    /// before resizing a window! Check either that the graphics queue or the
-    /// device is idle.
-    pub fence: vk::Fence,
-}
-
-impl Frame {
-    fn destroy(self, api: &Vulkan) {
-        unsafe {
-            api.device.destroy_image_view(self.image_view, None);
-            api.device.destroy_framebuffer(self.framebuffer, None);
-            // no need to free command buffers if we're destroying the pool
-            api.device.destroy_command_pool(self.command_pool, None);
-            api.device.destroy_fence(self.fence, None);
-        }
-        self.geometry.destroy(api);
-    }
-
-    pub fn reset(&self, api: &Vulkan) -> VkResult<()> {
-        unsafe {
-            api.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
-            api.device.reset_fences(&[self.fence])?;
-            api.device
-                .reset_command_pool(self.command_pool, vk::CommandPoolResetFlags::empty())?;
-        }
-        Ok(())
-    }
-}
-
-fn regenerate_frames(
-    api: &Vulkan,
-    swapchain: &Swapchain,
-    shader: &UiShader,
-    frames: &mut Vec<Frame>,
-) -> VkResult<()> {
-    let images = unsafe { api.swapchain_khr.get_swapchain_images(swapchain.handle) }?;
-
-    // if there are more frames than images
-    if frames.len() > images.len() {
-        for extra in frames.drain(images.len()..) {
-            extra.destroy(api);
-        }
-    }
-
-    // all the frames in the middle
-    for (frame, image) in frames.iter_mut().zip(images.iter()) {
-        unsafe {
-            api.device.destroy_image_view(frame.image_view, None);
-            api.device.destroy_framebuffer(frame.framebuffer, None);
-        }
-
-        frame.image = *image;
-        frame.image_view = api.create_image_view(frame.image, swapchain.format)?;
-        frame.framebuffer = shader.create_framebuffer(api, frame.image_view, swapchain.extent)?;
-    }
-
-    // if there are more images than frames
-    for image in &images[frames.len()..] {
-        let image = *image;
-        let image_view = api.create_image_view(image, swapchain.format)?;
-        let framebuffer = shader.create_framebuffer(api, image_view, swapchain.extent)?;
-
-        let command_pool = {
-            let create_info = vk::CommandPoolCreateInfo::builder()
-                .queue_family_index(api.physical_device.graphics_queue_family);
-            unsafe { api.device.create_command_pool(&create_info, None) }?
-        };
-
-        let command_buffer = api.allocate_command_buffer(command_pool)?;
-
-        let geometry = UiGeometryBuffer::new(api)?;
-
-        let fence = {
-            let create_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
-            unsafe { api.device.create_fence(&create_info, None) }?
-        };
-
-        frames.push(Frame {
-            image,
-            image_view,
-            framebuffer,
-            command_pool,
-            command_buffer,
-            geometry,
-            descriptors: Vec::new(),
-            fence,
-        });
-    }
-
-    assert_eq!(frames.len(), images.len());
-
-    Ok(())
-}
-
 /// Utility struct containing per-swapchain members. Separate from `WindowData`
 /// because all of this information changes when a swapchain resizes.
 struct Swapchain {
@@ -290,6 +173,7 @@ struct Swapchain {
     handle: vk::SwapchainKHR,
     extent: vk::Extent2D,
     format: vk::Format,
+    views: SmallVec<[vk::ImageView; PREFERRED_SWAPCHAIN_LENGTH as usize]>,
 }
 
 impl Swapchain {
@@ -299,14 +183,20 @@ impl Swapchain {
 
     fn resize(&mut self, api: &Vulkan, extent: vk::Extent2D) -> VkResult<()> {
         unsafe { api.device.device_wait_idle() }?;
-        let new = Self::create_swapchain(api, self.surface, extent, self.handle)?;
-        unsafe { api.swapchain_khr.destroy_swapchain(self.handle, None) };
-        *self = new;
+
+        let mut new = Self::create_swapchain(api, self.surface, extent, self.handle)?;
+        std::mem::swap(&mut new, self);
+        new.destroy(api);
+
         Ok(())
     }
 
-    fn destroy(self, api: &Vulkan) {
+    fn destroy(mut self, api: &Vulkan) {
         unsafe {
+            for view in self.views.drain(..) {
+                api.device.destroy_image_view(view, None);
+            }
+
             api.swapchain_khr.destroy_swapchain(self.handle, None);
         }
     }
@@ -395,32 +285,21 @@ impl Swapchain {
             unsafe { api.swapchain_khr.create_swapchain(&create_info, None) }?
         };
 
+        let views = {
+            let images = unsafe { api.swapchain_khr.get_swapchain_images(handle) }.unwrap();
+            let mut views = SmallVec::with_capacity(images.len());
+            for image in images {
+                views.push(api.create_image_view(image, format).unwrap());
+            }
+            views
+        };
+
         Ok(Self {
             surface,
             handle,
             extent: image_extent,
             format,
+            views,
         })
-    }
-}
-
-pub struct FrameSync {
-    pub acquire_semaphore: vk::Semaphore,
-    pub present_semaphore: vk::Semaphore,
-}
-
-impl FrameSync {
-    fn new(api: &Vulkan) -> VkResult<Self> {
-        Ok(Self {
-            acquire_semaphore: api.create_semaphore(false)?,
-            present_semaphore: api.create_semaphore(false)?,
-        })
-    }
-
-    fn destroy(self, device: &ash::Device) {
-        unsafe {
-            device.destroy_semaphore(self.acquire_semaphore, None);
-            device.destroy_semaphore(self.present_semaphore, None);
-        }
     }
 }

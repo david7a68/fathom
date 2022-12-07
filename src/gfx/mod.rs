@@ -40,17 +40,33 @@ pub enum Error {
     },
 }
 
-/// An image to which render operations may write to.
-pub struct RenderTarget {}
+/// An object that can be can be rendered to.
+pub enum RenderTarget {
+    Swapchain(Handle<Swapchain>),
+    Image(Handle<Image>),
+}
 
 /// A sequence of render targets associated with a window. Each render target
 /// may be acquired in turn for rendering, and be 'presented' to the user once
 /// rendering is complete.
 pub struct Swapchain {}
 
+impl From<Handle<Swapchain>> for RenderTarget {
+    fn from(val: Handle<Swapchain>) -> Self {
+        RenderTarget::Swapchain(val)
+    }
+}
+
 /// A 2-dimensional image with configurable pixel layout and color space. Refer
 /// to [`Layout`] and [`ColorSpace`] for more details.
 pub struct Image {}
+
+
+impl From<Handle<Image>> for RenderTarget {
+    fn from(val: Handle<Image>) -> Self {
+        RenderTarget::Image(val)
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -294,11 +310,6 @@ pub trait GfxDevice {
 
     fn destroy_swapchain(&self, handle: Handle<Swapchain>) -> Result<(), Error>;
 
-    fn get_next_swapchain_image(
-        &self,
-        handle: Handle<Swapchain>,
-    ) -> Result<Handle<RenderTarget>, Error>;
-
     /// Presents the next image in each swapchain after waiting for drawing to
     /// those images to complete. The render target handles used to render to
     /// the swapchains will be invalid once this method returns. Retrieve the
@@ -308,7 +319,7 @@ pub trait GfxDevice {
     ///
     /// This is a synchronizing operation and will block until rendering to the
     /// next image in each swapchain is complete.
-    fn present_swapchain_images(&self, handles: &[Handle<Swapchain>]) -> Result<(), Error>;
+    fn present_swapchains(&self, handles: &[Handle<Swapchain>]) -> Result<(), Error>;
 
     /// Creates an image that can be used in rendering operations.
     fn create_image(&self, extent: Extent) -> Result<Handle<Image>, Error>;
@@ -362,17 +373,13 @@ pub trait GfxDevice {
     /// rendering into (writing to) this image are complete.
     fn get_image_pixels(&self, handle: Handle<Image>) -> Result<PixelBuffer, Error>;
 
-    /// Destroys the render target, freeing any associated resources without
-    /// affecting the image that the render target was created from.
-    fn destroy_render_target(&self, handle: Handle<RenderTarget>) -> Result<(), Error>;
-
     /// Draws the provided geometry to the render target. All content that was
     /// once in the render target will be overwritten.
     ///
     /// The command list can be reused immediately once this method returns.
     fn draw(
         &self,
-        render_target: Handle<RenderTarget>,
+        render_target: RenderTarget,
         commands: &DrawCommandList,
     ) -> Result<(), Error>;
 
